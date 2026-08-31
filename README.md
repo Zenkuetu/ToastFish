@@ -1,55 +1,90 @@
 # ToastFish v3.0
 
-> 一款让你随时随地、被动地学习英语的 Windows 背单词工具。
-
-本版本基于 [Uahh/ToastFish](https://github.com/Uahh/ToastFish)（MIT License）二次开发。
+> 一款让你**随时随地、被动地**学习英语 / 日语的 Windows 背单词工具。
+> 常驻系统托盘，主动弹出单词，你只需随手按一下热键作答，在碎片时间里无痛积累词汇量。
 
 ---
 
-## 简介
+## 快速上手（3 步）
 
-ToastFish 是一款**被动式**英语 / 日语学习工具——它常驻系统托盘，主动弹出单词，你只需随手按下热键作答，无需刻意腾出整块时间，在刷手机、等编译、摸鱼的间隙即可无痛积累词汇量。基于 WPF（.NET Framework 4.7.2），使用 SM2+ 间隔重复算法，以 WinForms 通知弹窗展示单词及选项。
+1. **启动**：双击 `ToastFish.exe`（或安装包安装后启动），程序最小化到系统托盘（任务栏右下角）。
+2. **开始**：按 `Alt+Q` 开始一轮学习。
+3. **作答**：弹窗出现单词后，按 `Alt+1` ~ `Alt+4` 选择记忆程度。
 
-## 主要功能
+学完一轮会自动进入复盘测验和学后阅读。就这么简单。
 
-- **通知弹窗背词**：WinForms 自绘弹窗（适配 Windows 11），支持英语 / 日语 / 五十音
-- **SM2+ 间隔重复**：经调优的记忆算法，控制合意难度区间
-- **AI 阅读模式**：学后 AI 短文阅读、15 选 10 完形填空（DeepSeek API）
-- **惊喜复习 & 学后微阅读**：独立于主学习流程的巩固环节
-- **学习记录仪表盘**：可视化学习数据（Vue 3 + Chart.js）
-- **热键作答**：`ALT+Q` 开始学习，`ALT+1~4` 答题，`ALT+H` 显示/隐藏弹窗
-- **开机自启动**、发音朗读、Excel 日志导入导出
+---
 
-## 目录结构
+## 热键速查
 
-```
-ToastFish/                        ← 运行目录（编译产物 + 运行资源）
-Source/ToastFish-main/            ← C# 源码（.sln / .csproj / Model / View）
-Release/                          ← 第三方 DLL 仓库（csproj 编译引用）
-Tools/                            ← 数据工具与仪表盘脚本（Python）
-Installer/                        ← Inno Setup 安装包构建脚本
-```
+| 热键 | 作用 |
+|------|------|
+| `Alt+Q` | 开始 / 停止学习 |
+| `Alt+1` | 没印象（Again） |
+| `Alt+2` | 模糊（Hard） |
+| `Alt+3` | 记住（Good） |
+| `Alt+4` | 牢记（Easy） |
+| `Alt+~` | 重复播放发音 |
+| `Alt+H` | 显示 / 隐藏当前弹窗 |
 
-## 编译
+> 也可用鼠标直接点击弹窗上的按钮。弹窗超时未答会被视为「没印象」。
 
-环境要求：VS Build Tools（含 .NET 桌面生成工具）、.NET Framework 4.7.2。
+---
 
-```bash
-# 命令行编译（相对仓库根）
-"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe" "Source\ToastFish-main\ToastFish.sln" -t:Build -p:Configuration=Release -p:Platform="Any CPU"
-```
+## 托盘菜单功能
 
-编译产物输出至 `Source/ToastFish-main/bin/Release/`。运行程序依赖 `Resources/inami.db`（纯净词库，已包含在本仓库）。
+右键点击托盘图标可访问全部功能：
 
-> 注意：源码 `ToastFish.csproj` 通过 `..\..\Release\` 相对路径引用第三方 DLL，请保持 `Release/` 目录与 `Source/` 的相对位置不变。
+| 菜单 | 说明 |
+|------|------|
+| 开始 / 停止 | 开始或停止一轮学习（`Alt+Q`） |
+| 选择词库 | 切换词表（CET4/6、考研、雅思、托福、GRE 等 16 套 + 日语 + 五十音） |
+| 设置单词数量 | 每轮新词数（默认 5） |
+| 发音选择 | 英式 / 美式 |
+| 自动播放 | 弹窗时自动朗读 |
+| 开机自启 | 随 Windows 启动 |
+| 导入单词 | 用 Excel 模板导入自定义词表 |
+| 测试 | 随机抽词测验 |
+| 学习报告 | 打开可视化学习仪表盘 |
+| 参数设置 | AI 短文 / 测试模式等 |
+| 使用说明 | 原版图文教程 |
+| 退出 | 关闭程序并保存学习记录 |
 
-## 数据库说明
+---
 
-- 仓库内的 `Source/ToastFish-main/Resources/inami.db` 为**纯净词库**（无学习记录）。
-- 学习数据（进度、SM2+ 参数）保存在本地运行目录的 `Resources/inami.db`，已通过 `.gitignore` 排除，不会上传。
+## 学习流程详解
 
-## 许可证
+1. 按 `Alt+Q` 开始，弹窗依次展示单词（音标、词性释义、例句、词组）。
+2. 按 `Alt+1~4` 作答，程序依据记忆程度自动安排下次复习时间。
+3. 一轮结束 → **复盘测验**（中译英 / 英译中选择题）→ **学后阅读** → 统计面板。
 
-本项目遵循原项目的 [MIT License](Source/ToastFish-main/LICENSE)，版权归原作者 [Uahh](https://github.com/Uahh/ToastFish) 所有。二次开发部分同样以 MIT 协议发布。
+**学后阅读**：刚学的单词会组成例句串读或 AI 短文，目标词橙色高亮；阅读时点击任意英文单词即可查有道词典（悬停变手型）。
 
-详细的使用说明、二次开发说明与第三方组件清单，见 [Source/ToastFish-main/README.md](Source/ToastFish-main/README.md)。
+**惊喜复习**：平时用电脑时，键盘 / 鼠标 / 手柄操作有 0.5% 概率弹出一个迷你测验，答对巩固记忆，不会打断当前学习。
+
+---
+
+## 数据存储
+
+所有学习数据存于**单一文件**（卸载不删除，重装自动恢复）：
+
+- 已安装版：`%LOCALAPPDATA%\ToastFish\Resources\inami.db`
+- 绿色版：`ToastFish\Resources\inami.db`
+
+---
+
+## 常见问题
+
+**快捷键没反应？** 可能被其他软件占用全局热键（截图软件、输入法等），关闭后重试。
+
+**弹窗不出现？** 检查任务管理器确认进程存在；本工具用自绘窗口，不是系统通知，勿在通知中心查找。
+
+**如何迁移到新电脑？** 复制上面的 `inami.db` 到新电脑同位置即可。
+
+---
+
+## 开发者信息
+
+本版本基于 [Uahh/ToastFish](https://github.com/Uahh/ToastFish)（MIT License）二次开发。编译方法、二次开发说明与第三方组件清单见 [Source/ToastFish-main/README.md](Source/ToastFish-main/README.md)。
+
+许可证：[MIT License](Source/ToastFish-main/LICENSE)
