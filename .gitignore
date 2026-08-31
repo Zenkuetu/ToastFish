@@ -1,0 +1,69 @@
+# ============================================================
+# ToastFish v3.0 .gitignore（仓库根：E:/ToastFish.v3.0）
+# 原则：提交「源码 + 内容资源 + 第三方DLL + 构建脚本」
+#       排除「个人学习数据 + 编译/部署产物 + 备份」
+# ============================================================
+
+# ---------- 个人学习数据（含隐私，绝不上传） ----------
+# 数据库学习记录 —— 开源用 Source/Resources 里的纯净库
+ToastFish/Resources/inami.db
+ToastFish/Resources/inami.db-shm
+ToastFish/Resources/inami.db-wal
+ToastFish/Resources/inami.db.bak*
+ToastFish/Resources/.sm2_fixed
+
+# API Key 配置（DeepSeek）
+ToastFish/Resources/ai_config.txt
+
+# AI 诊断 / 失败日志
+ToastFish/Resources/ai_*.log
+
+# 学习日志 Excel、发音缓存、数据库快照
+ToastFish/Log/
+ToastFish/Mp3Cache/
+ToastFish/DbSnapshots/
+
+# 生成的可视化仪表盘（内联学习数据）
+ToastFish/Resources/dashboard.html
+
+# Claude Code 本地设置
+ToastFish/.claude/
+
+# ---------- 编译 / 部署产物（可由 Source 重新编译） ----------
+ToastFish/*.exe
+ToastFish/*.dll
+ToastFish/*.pdb
+ToastFish/ToastFish.exe.config
+ToastFish/ToastFish.exe.manifest
+ToastFish/x64/
+ToastFish/x86/
+
+# ---------- 编译中间产物 ----------
+Source/**/bin/
+Source/**/obj/
+Source/**/packages/
+*.user
+*.suo
+
+# ---------- 安装包产物 ----------
+Installer/staging/
+Installer/ToastFish-v3.0-Setup.exe
+
+# ---------- 清理备份目录（_trash_backup_*） ----------
+_trash_backup_*/
+
+# ---------- 备份文件 ----------
+*.bak
+*.bak_*
+
+# ---------- IDE / 系统 ----------
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---------- Python 缓存 ----------
+__pycache__/
+*.pyc

@@ -1,0 +1,26 @@
+# 编译产物
+obj/
+bin/
+packages/
+*.user
+*.suo
+.vs/
+
+# 敏感配置（API Key / token）
+token.txt
+ai_config.txt
+
+# 日志与个人数据
+*.log
+Log/
+DbSnapshots/
+Mp3Cache/
+
+# 备份文件
+*.bak
+*.bak_*
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store

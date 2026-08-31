@@ -1,0 +1,1731 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ToastFish Dashboard v3.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+JP:wght@300;700&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CSS Variables & Reset
+   ============================================================ */
+:root {
+  --bg-deep: #06060F;
+  --bg-primary: #0A0A1A;
+  --bg-card: #0F0F25;
+  --bg-card-hover: #141430;
+  --border: #1A1A3E;
+  --border-glow: #2A2A5E;
+  --neon-cyan: #00F0FF;
+  --neon-cyan-dim: rgba(0, 240, 255, 0.3);
+  --neon-magenta: #FF00FF;
+  --neon-magenta-dim: rgba(255, 0, 255, 0.3);
+  --neon-amber: #FFC83C;
+  --neon-amber-dim: rgba(255, 200, 60, 0.3);
+  --neon-green: #00FF88;
+  --neon-red: #FF3355;
+  --text-primary: #E0E0F0;
+  --text-secondary: #9090B0;
+  --text-dim: #6060A0;
+  --font-display: 'Orbitron', sans-serif;
+  --font-body: 'Rajdhani', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-jp: 'Noto Sans JP', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  scroll-behavior: smooth;
+  font-size: 14px;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: overlay;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--neon-cyan-dim);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--neon-cyan); }
+
+/* Scanline overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ============================================================
+   Starfield Canvas
+   ============================================================ */
+#starfield {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ============================================================
+   Nav Header
+   ============================================================ */
+.nav-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 32px;
+  background: rgba(10, 10, 26, 0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  gap: 24px;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.nav-brand .logo-icon {
+  font-size: 24px;
+  filter: drop-shadow(0 0 8px var(--neon-amber));
+}
+
+.nav-brand h1 {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--text-primary);
+}
+
+.nav-brand h1 span { color: var(--neon-cyan); }
+
+.nav-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.nav-tab {
+  position: relative;
+  padding: 10px 18px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.nav-tab:hover:not(.locked) {
+  color: var(--text-primary);
+  border-color: var(--border-glow);
+  background: rgba(0, 240, 255, 0.05);
+}
+
+.nav-tab.active {
+  color: var(--neon-cyan);
+  border-color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.08);
+  box-shadow: 0 0 15px var(--neon-cyan-dim), inset 0 0 8px rgba(0, 240, 255, 0.05);
+}
+
+.nav-tab.locked {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.nav-tab .lock-icon {
+  font-size: 10px;
+  margin-left: 2px;
+}
+
+/* ============================================================
+   Page Layout
+   ============================================================ */
+.page {
+  position: relative;
+  z-index: 1;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px 32px 40px;
+}
+
+/* No transition needed — v-show keeps components alive */
+
+/* Page visibility transition */
+.page {
+  transition: opacity 0.25s ease;
+}
+
+.page[style*="display: none"] {
+  opacity: 0;
+}
+
+/* ============================================================
+   KPI Row
+   ============================================================ */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.kpi-card {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 16px;
+  text-align: center;
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  padding: 1px;
+  background: linear-gradient(135deg, transparent 40%, var(--neon-cyan-dim));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 240, 255, 0.08);
+}
+
+.kpi-card:hover::before { opacity: 1; }
+
+.kpi-card .kpi-icon {
+  font-size: 28px;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.kpi-card .kpi-value {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 900;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 20px var(--neon-cyan-dim);
+  line-height: 1.2;
+}
+
+.kpi-card .kpi-value.pct { color: var(--neon-magenta); text-shadow: 0 0 20px var(--neon-magenta-dim); }
+
+.kpi-card .kpi-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.kpi-card .jp-decor {
+  position: absolute;
+  bottom: 6px;
+  right: 10px;
+  font-family: var(--font-jp);
+  font-size: 10px;
+  color: rgba(96, 96, 160, 0.2);
+  pointer-events: none;
+}
+
+/* ============================================================
+   Chart Card
+   ============================================================ */
+.chart-grid-2x2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.row-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.chart-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.chart-card:hover {
+  border-color: var(--border-glow);
+  box-shadow: 0 4px 24px rgba(0, 240, 255, 0.04);
+}
+
+.chart-card.full-width {
+  grid-column: 1 / -1;
+}
+
+.chart-card h3 {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-card h3::before {
+  content: '';
+  display: block;
+  width: 8px;
+  height: 8px;
+  background: var(--neon-cyan);
+  box-shadow: 0 0 8px var(--neon-cyan);
+  border-radius: 50%;
+}
+
+.chart-card .chart-wrap {
+  position: relative;
+}
+
+.chart-card .chart-wrap canvas {
+  max-height: 280px;
+}
+
+.chart-card .citation {
+  font-family: var(--font-jp);
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 8px;
+  text-align: right;
+  font-style: italic;
+}
+
+/* Stat overlay for forgetting curve */
+.stat-overlay {
+  position: absolute;
+  top: 50%;
+  right: 24px;
+  transform: translateY(-50%);
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 900;
+  color: var(--neon-amber);
+  text-shadow: 0 0 15px var(--neon-amber-dim);
+  text-align: right;
+  pointer-events: none;
+}
+
+.stat-overlay span {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+/* ============================================================
+   Calendar Heatmap
+   ============================================================ */
+.calendar-grid {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+}
+
+.calendar-week {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.calendar-day {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.calendar-day:hover {
+  transform: scale(1.5);
+  z-index: 10;
+  box-shadow: 0 0 10px var(--neon-cyan);
+}
+
+.calendar-day.count-0 { background: rgba(255,255,255,0.03); }
+.calendar-day.count-1 { background: rgba(0, 240, 255, 0.15); }
+.calendar-day.count-2 { background: rgba(0, 240, 255, 0.3); }
+.calendar-day.count-3 { background: rgba(0, 240, 255, 0.55); }
+.calendar-day.count-4 { background: rgba(0, 240, 255, 0.8); box-shadow: 0 0 4px var(--neon-cyan-dim); }
+
+.calendar-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ============================================================
+   Word Table
+   ============================================================ */
+.word-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.word-table th {
+  text-align: left;
+  padding: 8px 12px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  text-transform: uppercase;
+}
+
+.word-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(26, 26, 62, 0.5);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.word-table tr:hover td {
+  background: rgba(255, 0, 255, 0.04);
+}
+
+.word-table .word-col {
+  font-weight: 700;
+  color: var(--neon-amber);
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.word-table .diff-high { color: var(--neon-magenta); text-shadow: 0 0 8px var(--neon-magenta-dim); }
+.word-table .diff-mid { color: var(--neon-amber); }
+
+.word-table .progress-mini {
+  display: inline-block;
+  width: 60px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+.word-table .progress-mini-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--neon-cyan);
+  box-shadow: 0 0 6px var(--neon-cyan-dim);
+}
+
+/* ============================================================
+   Heatmap Matrix (Rhythm)
+   ============================================================ */
+.rhythm-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.rhythm-row {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.rhythm-row .rhythm-label {
+  width: 70px;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  text-align: right;
+  padding-right: 8px;
+}
+
+.rhythm-cell {
+  width: 36px;
+  height: 28px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  transition: transform 0.15s;
+}
+
+.rhythm-cell:hover { transform: scale(1.2); z-index: 5; }
+
+.rhythm-cell.null { background: rgba(255,255,255,0.02); color: var(--text-dim); }
+
+/* ============================================================
+   Placeholder Page
+   ============================================================ */
+.placeholder-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  gap: 24px;
+}
+
+.placeholder-icon {
+  font-size: 64px;
+  filter: grayscale(0.5);
+  animation: floatIcon 3s ease-in-out infinite;
+}
+
+@keyframes floatIcon {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+.placeholder-title {
+  font-family: var(--font-display);
+  font-size: 24px;
+  color: var(--text-dim);
+  letter-spacing: 3px;
+}
+
+.placeholder-desc {
+  font-family: var(--font-jp);
+  font-size: 14px;
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+.placeholder-preview {
+  margin-top: 16px;
+  padding: 24px 32px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  max-width: 500px;
+  text-align: center;
+}
+
+.placeholder-preview h4 {
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.placeholder-preview p {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   Footer
+   ============================================================ */
+.page-footer {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 24px;
+  border-top: 1px solid var(--border);
+  margin-top: 40px;
+}
+
+.page-footer .footer-citations {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-jp);
+  letter-spacing: 0.5px;
+  line-height: 1.8;
+}
+
+.page-footer .footer-citations strong {
+  color: var(--neon-cyan);
+  font-weight: 400;
+}
+
+/* ============================================================
+   Glitch animation for KPI values
+   ============================================================ */
+@keyframes glitch-text {
+  0%, 100% { transform: translate(0); }
+  20% { transform: translate(-2px, 1px); }
+  40% { transform: translate(2px, -1px); }
+  60% { transform: translate(-1px, -1px); }
+  80% { transform: translate(1px, 1px); }
+}
+
+.kpi-value.glitch {
+  animation: glitch-text 0.3s ease-in-out 2;
+}
+
+/* ============================================================
+   Essay List
+   ============================================================ */
+.page-essays { max-width: 1000px; }
+
+.essay-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.essay-card:hover { border-color: var(--border-glow); }
+.essay-card.expanded { border-color: var(--neon-cyan); box-shadow: 0 0 12px var(--neon-cyan-dim); }
+
+.essay-summary {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+  cursor: pointer;
+  user-select: none;
+  gap: 7px;
+}
+.essay-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.essay-summary-right {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.essay-date { font-family: var(--font-mono); font-size: 12px; color: var(--neon-cyan); white-space: nowrap; }
+.essay-meta { font-size: 11px; color: var(--text-dim); }
+.essay-snippet { font-size: 12px; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+.essay-toggle { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+
+.essay-detail {
+  overflow: hidden;
+  border-top: 1px solid transparent;
+  padding: 0 20px;
+}
+.essay-card.expanded .essay-detail {
+  border-top-color: var(--border);
+  padding: 0 20px 20px 20px;
+}
+.essay-toggle {
+  font-size: 10px; color: var(--text-dim); flex-shrink: 0;
+  transition: transform 0.35s ease;
+}
+.essay-card.expanded .essay-toggle { transform: rotate(180deg); }
+.essay-section { margin-top: 16px; }
+.essay-section h4 {
+  font-family: var(--font-display);
+  font-size: 11px;
+  color: var(--neon-amber);
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+.essay-words { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); line-height: 1.7; }
+.essay-text { font-size: 13px; color: var(--text-primary); line-height: 1.8; white-space: pre-wrap; }
+.essay-text-cn { font-size: 12px; color: var(--text-dim); line-height: 1.7; white-space: pre-wrap; }
+
+.essay-question { margin-bottom: 12px; padding: 10px; background: rgba(255,255,255,0.02); border-radius: 6px; }
+.eq-text { font-size: 12px; color: var(--text-primary); margin-bottom: 6px; font-weight: 600; }
+.eq-choices { display: flex; flex-direction: column; gap: 3px; }
+.eq-choice { font-size: 11px; color: var(--text-dim); padding: 3px 6px; }
+.eq-choice.correct { color: var(--neon-green); background: rgba(0, 255, 136, 0.05); border-radius: 3px; font-weight: 700; }
+
+/* Cloze candidate chips */
+.cloze-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 4px 10px; border-radius: 14px; font-size: 12px;
+  font-family: var(--font-mono); font-weight: 600;
+}
+.cloze-correct { background: rgba(0, 255, 136, 0.1); color: var(--neon-green); border: 1px solid rgba(0, 255, 136, 0.3); }
+.cloze-distractor { background: rgba(255, 51, 85, 0.08); color: var(--neon-red); border: 1px solid rgba(255, 51, 85, 0.2); }
+.cloze-blank-tag { font-size: 10px; opacity: 0.7; }
+
+/* Essay type badge */
+.essay-type-badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 10px; font-size: 11px;
+  font-weight: 700; white-space: nowrap; flex-shrink: 0;
+}
+.type-reading { background: rgba(0, 240, 255, 0.12); color: var(--neon-cyan); border: 1px solid rgba(0, 240, 255, 0.3); }
+.type-cloze  { background: rgba(255, 200, 60, 0.12); color: var(--neon-amber); border: 1px solid rgba(255, 200, 60, 0.3); }
+
+/* Delete button */
+.essay-delete-btn {
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  cursor: pointer; font-size: 14px; padding: 2px 6px; line-height: 1;
+  opacity: 0.3; transition: all 0.2s; flex-shrink: 0;
+}
+.essay-delete-btn:hover { opacity: 1; background: rgba(255, 51, 85, 0.15); border-color: var(--neon-red); }
+.essay-delete-btn:disabled { opacity: 0.1; cursor: not-allowed; }
+
+/* Copy-to-clipboard button (package essay for AI review) */
+.essay-copy-btn {
+  background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.25);
+  color: var(--neon-cyan); border-radius: 6px; cursor: pointer;
+  font-size: 12px; padding: 4px 10px; line-height: 1;
+  opacity: 0.8; transition: all 0.2s; flex-shrink: 0; white-space: nowrap;
+}
+.essay-copy-btn:hover { opacity: 1; background: rgba(0, 240, 255, 0.18); border-color: var(--neon-cyan); }
+
+/* Toast */
+.toast-notify {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  z-index: 200; animation: toastIn 0.3s ease;
+  background: rgba(0, 255, 136, 0.15); color: var(--neon-green);
+  border: 1px solid rgba(0, 255, 136, 0.3);
+}
+.toast-err { background: rgba(255, 51, 85, 0.15); color: var(--neon-red); border-color: rgba(255, 51, 85, 0.3); }
+@keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(12px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+@media (max-width: 1200px) {
+  .kpi-row { grid-template-columns: repeat(3, 1fr); }
+  .chart-grid-2x2, .row-2col { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+  .nav-header { flex-direction: column; gap: 8px; padding: 12px 16px; }
+  .nav-brand h1 { font-size: 13px; }
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .page { padding: 16px; }
+  .kpi-card .kpi-value { font-size: 22px; }
+}
+</style>
+</head>
+<body>
+<script id="app-data" type="application/json">___DATA_JSON___</script>
+<div id="app">
+  <canvas id="starfield" ref="starfield"></canvas>
+  <nav class="nav-header">
+    <div class="nav-brand">
+      <span class="logo-icon">🔥</span>
+      <h1>TOASTFISH // <span>学習ダッシュボード</span> v3.0</h1>
+    </div>
+    <div class="nav-tabs">
+      <button v-for="tab in tabs" :key="tab.id"
+              class="nav-tab"
+              :class="{ active: currentTab === tab.id, locked: !tab.available }"
+              @click="tab.available && (currentTab = tab.id)"
+              :title="tab.available ? tab.label : '即将推出'"
+      >{{ tab.label }}<span v-if="!tab.available" class="lock-icon">🔒</span></button>
+    </div>
+  </nav>
+
+  <!-- v-show 在外层 div 上，避免与子组件根元素的 v-if 冲突 -->
+  <div v-show="currentTab === 'overview'"><page-overview :data="data" /></div>
+  <div v-show="currentTab === 'academic'"><page-academic :data="data" /></div>
+  <div v-show="currentTab === 'essay'"><page-essays :data="data" /></div>
+  <div v-show="currentTab === 'galaxy' || currentTab === 'insight'"><page-placeholder :data="data" /></div>
+
+  <footer class="page-footer" v-if="currentTab !== 'placeholder'">
+    <p class="footer-citations">
+      理论基础：<strong>Ebbinghaus 遗忘曲线 (1885)</strong> ·
+      <strong>Bjork 合意难度 (1994)</strong> ·
+      <strong>Cepeda 间隔效应 (2006)</strong> ·
+      <strong>Roediger 提取练习 (2006)</strong> ·
+      <strong>SM2+ 算法 (Wozniak 1987 / ToastFish 实现)</strong>
+    </p>
+  </footer>
+</div>
+
+
+<!-- VUE_INLINE --><script>
+// ============================================================
+// ToastFish Dashboard — Vue 3 Application
+// ============================================================
+const { createApp, ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } = Vue
+
+// ─── Read embedded data ───
+const appData = JSON.parse(document.getElementById('app-data').textContent)
+
+// ============================================================
+// Chart.js global config
+// ============================================================
+Chart.defaults.color = '#9090B0'
+Chart.defaults.borderColor = '#1A1A3E'
+Chart.defaults.font.family = "'Rajdhani', sans-serif"
+Chart.defaults.font.size = 11
+Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(15, 15, 37, 0.96)'
+Chart.defaults.plugins.tooltip.borderColor = '#00F0FF'
+Chart.defaults.plugins.tooltip.borderWidth = 1
+Chart.defaults.plugins.tooltip.titleFont = { family: "'Orbitron'", size: 11 }
+Chart.defaults.plugins.tooltip.bodyFont = { family: "'JetBrains Mono'", size: 11 }
+Chart.defaults.scale.grid.color = 'rgba(26, 26, 62, 0.5)'
+Chart.defaults.scale.grid.drawBorder = false
+
+// ============================================================
+// Shared utilities
+// ============================================================
+function createGradient(ctx, c1, c2) {
+  const g = ctx.createLinearGradient(0, 0, 0, 280)
+  g.addColorStop(0, c1); g.addColorStop(1, c2); return g
+}
+
+function getHeatColor(rate) {
+  if (rate === null || rate === undefined) return 'rgba(255,255,255,0.02)'
+  if (rate >= 95) return 'rgba(0, 255, 136, 0.7)'
+  if (rate >= 85) return 'rgba(0, 240, 255, 0.55)'
+  if (rate >= 70) return 'rgba(255, 200, 60, 0.45)'
+  if (rate >= 50) return 'rgba(255, 51, 85, 0.4)'
+  return 'rgba(255, 51, 85, 0.25)'
+}
+
+// ============================================================
+// Starfield Background
+// ============================================================
+const StarfieldBg = {
+  setup() {
+    const canvas = ref(null)
+    let animId = null
+    let stars = []
+
+    onMounted(() => {
+      const el = document.getElementById('starfield') || document.querySelector('#starfield')
+      if (!el) return
+      const ctx = el.getContext('2d')
+      const resize = () => { el.width = window.innerWidth; el.height = window.innerHeight }
+      resize(); window.addEventListener('resize', resize)
+
+      stars = Array.from({length: 100}, () => ({
+        x: Math.random() * el.width, y: Math.random() * el.height,
+        r: Math.random() * 1.5 + 0.3, vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.3, a: Math.random()
+      }))
+
+      const draw = () => {
+        ctx.clearRect(0, 0, el.width, el.height)
+        for (const s of stars) {
+          s.x += s.vx; s.y += s.vy
+          if (s.x < 0) s.x = el.width; if (s.x > el.width) s.x = 0
+          if (s.y < 0) s.y = el.height; if (s.y > el.height) s.y = 0
+          const flicker = 0.4 + 0.6 * Math.sin(Date.now() * 0.001 + s.a * 10)
+          ctx.beginPath()
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
+          ctx.fillStyle = `rgba(0, 240, 255, ${flicker * 0.5})`
+          ctx.fill()
+        }
+        animId = requestAnimationFrame(draw)
+      }
+      draw()
+    })
+
+    onBeforeUnmount(() => { animId && cancelAnimationFrame(animId) })
+
+    return { canvas }
+  },
+  template: '<div></div>'
+}
+
+// ============================================================
+// Page 1: Overview
+// ============================================================
+const PageOverview = {
+  props: ['data'],
+  setup(props) {
+    const dailyBar = ref(null), cumArea = ref(null), scoreStack = ref(null)
+    const accuracyLine = ref(null), diffHist = ref(null), intervalDist = ref(null)
+    let charts = []
+
+    const destroyCharts = () => { charts.forEach(c => c?.destroy()); charts = [] }
+
+    onMounted(() => {
+      nextTick(() => {
+        const d = props.data?.page1
+        if (!d) return
+        try {
+
+        // ── Daily Words Bar ──
+        if (dailyBar.value) {
+          const ctx = dailyBar.value.getContext('2d')
+          const c = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: d.dailyTrend.map(r => r.date.slice(5)),
+              datasets: [{
+                label: '学习词数', data: d.dailyTrend.map(r => r.words),
+                backgroundColor: d.dailyTrend.map((_, i) =>
+                  createGradient(ctx, 'rgba(0, 240, 255, 0.6)', 'rgba(0, 240, 255, 0.05)')),
+                borderRadius: 3, borderSkipped: false
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { y: { beginAtZero: true, ticks: { color: '#6060A0' } },
+                        x: { ticks: { color: '#6060A0', maxTicksLimit: 12 } } }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Cumulative Area ──
+        if (cumArea.value) {
+          const ctx = cumArea.value.getContext('2d')
+          const c = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: d.cumulative.map(r => r.date.slice(5)),
+              datasets: [{
+                label: '累计词数', data: d.cumulative.map(r => r.cumulative),
+                fill: true, tension: 0.3, pointRadius: 1.5,
+                borderColor: '#FF00FF', backgroundColor: 'rgba(255, 0, 255, 0.08)',
+                borderWidth: 2
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { y: { ticks: { color: '#6060A0' } },
+                        x: { ticks: { color: '#6060A0', maxTicksLimit: 12 } } }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Score Stack ──
+        if (scoreStack.value) {
+          const ctx = scoreStack.value.getContext('2d')
+          const c = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: d.dailyTrend.map(r => r.date.slice(5)),
+              datasets: [
+                { label: 'Easy', data: d.dailyTrend.map(r => r.easy),
+                   backgroundColor: '#00FF88', borderRadius: 0 },
+                { label: 'Good', data: d.dailyTrend.map(r => r.good),
+                   backgroundColor: '#00F0FF', borderRadius: 0 },
+                { label: 'Hard', data: d.dailyTrend.map(r => r.hard),
+                   backgroundColor: '#FFC83C', borderRadius: 0 },
+                { label: 'Again', data: d.dailyTrend.map(r => r.again),
+                   backgroundColor: '#FF3355', borderRadius: 0 },
+              ]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, padding: 16, color: '#9090B0' } } },
+              scales: { x: { stacked: true, ticks: { color: '#6060A0', maxTicksLimit: 12 } },
+                        y: { stacked: true, ticks: { color: '#6060A0' } } }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Accuracy Line ──
+        if (accuracyLine.value) {
+          const ctx = accuracyLine.value.getContext('2d')
+          const c = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: d.dailyTrend.map(r => r.date.slice(5)),
+              datasets: [{
+                label: '正确率 %', data: d.dailyTrend.map(r => r.accuracy),
+                borderColor: '#FF00FF', borderWidth: 2, tension: 0.3,
+                pointBackgroundColor: '#FF00FF', pointRadius: 2.5,
+                pointHoverRadius: 5, fill: false
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { y: { min: 0, max: 100, ticks: { color: '#6060A0', callback: v => v + '%' } },
+                        x: { ticks: { color: '#6060A0', maxTicksLimit: 12 } } }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Difficulty Histogram ──
+        if (diffHist.value) {
+          const ctx = diffHist.value.getContext('2d')
+          const isDesirable = (label) => {
+            const lo = parseFloat(label.split('-')[0])
+            return lo >= 0.15 && lo < 0.35
+          }
+          const c = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: d.diffHist.map(x => x.label),
+              datasets: [{
+                label: '词数', data: d.diffHist.map(x => x.count),
+                backgroundColor: d.diffHist.map(x => isDesirable(x.label)
+                  ? 'rgba(255, 0, 255, 0.6)' : 'rgba(0, 240, 255, 0.35)'),
+                borderRadius: 3, borderSkipped: false
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: {
+                legend: { display: false },
+                annotation: isDesirable ? {} : undefined
+              },
+              scales: { y: { beginAtZero: true, ticks: { color: '#6060A0' } },
+                        x: { ticks: { color: '#6060A0' } } }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Interval Distribution ──
+        if (intervalDist.value) {
+          const ctx = intervalDist.value.getContext('2d')
+          const c = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: d.intervalHist.map(x => x.label),
+              datasets: [{
+                label: '词数', data: d.intervalHist.map(x => x.count),
+                backgroundColor: 'rgba(0, 240, 255, 0.4)',
+                borderColor: 'rgba(0, 240, 255, 0.7)',
+                borderWidth: 1, borderRadius: 3, borderSkipped: false
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { y: { beginAtZero: true, ticks: { color: '#6060A0' } },
+                        x: { ticks: { color: '#6060A0' } } }
+            }
+          }); charts.push(c)
+        }
+      } catch(e) { console.error('Overview charts:', e) }
+    })
+  })
+
+    onBeforeUnmount(destroyCharts)
+
+    return { dailyBar, cumArea, scoreStack, accuracyLine, diffHist, intervalDist, d: props.data?.page1 }
+  },
+  template: `
+<div class="page page-overview">
+  <!-- KPI Row -->
+  <section class="kpi-row">
+    <div v-for="kpi in d.kpis" :key="kpi.label" class="kpi-card">
+      <span class="kpi-icon">{{kpi.icon}}</span>
+      <div class="kpi-value" :class="kpi.format">{{kpi.format === 'pct' ? kpi.value + '%' : kpi.value.toLocaleString()}}</div>
+      <div class="kpi-label">{{kpi.label}}</div>
+      <span class="jp-decor">トーストフィッシュ</span>
+    </div>
+  </section>
+
+  <!-- Trend Charts 2x2 -->
+  <section class="chart-grid-2x2">
+    <div class="chart-card">
+      <h3>每日学习词数</h3>
+      <div class="chart-wrap"><canvas ref="dailyBar" height="240"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>累计词汇增长</h3>
+      <div class="chart-wrap"><canvas ref="cumArea" height="240"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>评分分布</h3>
+      <div class="chart-wrap"><canvas ref="scoreStack" height="240"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>正确率趋势</h3>
+      <div class="chart-wrap"><canvas ref="accuracyLine" height="240"></canvas></div>
+    </div>
+  </section>
+
+  <!-- Calendar + Book Progress -->
+  <section class="row-2col">
+    <div class="chart-card">
+      <h3>学习日历</h3>
+      <div class="calendar-grid">
+        <template v-for="(week, wi) in calendarWeeks" :key="wi">
+          <div class="calendar-week">
+            <div v-for="day in week" :key="day.date"
+                 class="calendar-day"
+                 :class="'count-' + (day.count >= 100 ? 4 : day.count >= 50 ? 3 : day.count >= 20 ? 2 : day.count > 0 ? 1 : 0)"
+                 :title="day.date + ': ' + day.count + ' 词'"></div>
+          </div>
+        </template>
+      </div>
+      <div class="calendar-labels"><span>少</span><span>多</span></div>
+    </div>
+    <div class="chart-card">
+      <h3>词库进度</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px;">
+        <div v-for="b in d.bookProgress.slice(0, 8)" :key="b.name" style="display:flex;align-items:center;gap:8px;">
+          <span style="width:80px;font-size:11px;color:var(--text-dim);text-align:right;flex-shrink:0;">{{b.name}}</span>
+          <div style="flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden;">
+            <div style="height:100%;border-radius:4px;background:linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta));box-shadow: 0 0 8px var(--neon-cyan-dim);"
+                 :style="{width: b.pct + '%'}"></div>
+          </div>
+          <span style="font-size:10px;color:var(--text-dim);width:80px;">{{b.learned}} / {{b.total}} ({{b.pct}}%)</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Difficulty + Interval Distribution -->
+  <section class="row-2col">
+    <div class="chart-card">
+      <h3>难度分布 <span style="font-size:10px;color:var(--neon-magenta);">■ 合意难度区 (0.15-0.35)</span></h3>
+      <div class="chart-wrap"><canvas ref="diffHist" height="240"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>复习间隔分布</h3>
+      <div class="chart-wrap"><canvas ref="intervalDist" height="240"></canvas></div>
+    </div>
+  </section>
+</div>`,
+  computed: {
+    calendarWeeks() {
+      const data = this.d?.calendarData || []
+      const weeks = []; let currentWeek = []
+      for (const d of data) {
+        currentWeek.push(d)
+        if (d.weekday === 6) { weeks.push([...currentWeek]); currentWeek = [] }
+      }
+      if (currentWeek.length) weeks.push(currentWeek)
+      return weeks
+    }
+  }
+}
+
+// ============================================================
+// Page 2: Academic Analysis
+// ============================================================
+const PageAcademic = {
+  props: ['data'],
+  setup(props) {
+    const forgettingCurve = ref(null), bjorkScatter = ref(null)
+    const expansionCurve = ref(null), diffZone = ref(null), efficiency = ref(null)
+    let charts = []
+
+    const destroyCharts = () => { charts.forEach(c => c?.destroy()); charts = [] }
+
+    onMounted(() => {
+      nextTick(() => {
+        const d = props.data?.page2
+        if (!d) return
+        try {
+
+        // ── Forgetting Curve ──
+        if (forgettingCurve.value) {
+          const ctx = forgettingCurve.value.getContext('2d')
+          const rates = d.forgettingData.map(x => x.rate)
+          const fitted = d.forgettingData.map(x => x.fittedRate)
+          const { a, b } = d.fitParams
+          const c = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: d.forgettingData.map(x => x.label),
+              datasets: [
+                {
+                  label: '实测正确率', data: rates,
+                  borderColor: '#00F0FF', backgroundColor: 'rgba(0, 240, 255, 0.15)',
+                  borderWidth: 2.5, pointRadius: 5, pointBackgroundColor: '#00F0FF',
+                  pointBorderColor: '#0A0A1A', pointBorderWidth: 2, tension: 0.2, showLine: false
+                },
+                {
+                  label: `指数拟合 R(t)=${a.toFixed(2)}·e^(-t/${b.toFixed(0)})  R²=${d.fitParams.r2.toFixed(3)}`,
+                  data: fitted, borderColor: '#FF00FF', borderWidth: 1.5,
+                  borderDash: [6, 3], pointRadius: 0, fill: false, tension: 0.4
+                }
+              ]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: {
+                legend: { position: 'bottom', labels: { usePointStyle: true, color: '#9090B0', font: {size: 10} } },
+                tooltip: { callbacks: { label: ctx => ctx.dataset.label.includes('实测') ? `正确率: ${ctx.raw}%` : `拟合值: ${ctx.raw.toFixed(1)}%` } }
+              },
+              scales: {
+                y: { min: 0, max: 105, ticks: { color: '#6060A0', callback: v => v + '%' } },
+                x: { ticks: { color: '#6060A0' } }
+              }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Bjork Scatter ──
+        if (bjorkScatter.value) {
+          const ctx = bjorkScatter.value.getContext('2d')
+          const pts = d.bjorkPoints
+          const colors = pts.map(p => p.status === 5 ? 'rgba(0, 240, 255, 0.6)' : 'rgba(255, 0, 255, 0.7)')
+          const c = new Chart(ctx, {
+            type: 'scatter',
+            data: {
+              datasets: [
+                { label: '已掌握', data: pts.filter(p => p.status === 5).map(p => ({x: p.storage, y: p.retrieval})),
+                   backgroundColor: 'rgba(0, 240, 255, 0.5)', pointRadius: 3 },
+                { label: '学习中', data: pts.filter(p => p.status !== 5).map(p => ({x: p.storage, y: p.retrieval})),
+                   backgroundColor: 'rgba(255, 0, 255, 0.7)', pointRadius: 4 }
+              ]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: {
+                legend: { position: 'bottom', labels: { usePointStyle: true, color: '#9090B0' } },
+                tooltip: { callbacks: { label: ctx => {
+                  const pt = pts[ctx.dataIndex]
+                  return pt ? `${pt.word}: S=${pt.storage} τ=${pt.retrieval}` : ''
+                } } }
+              },
+              scales: {
+                x: { title: { display: true, text: '存储强度 S (代理)', color: '#6060A0' }, ticks: { color: '#6060A0' } },
+                y: { title: { display: true, text: '提取强度 τ (lastScore)', color: '#6060A0' }, min: 0, max: 1.1, ticks: { color: '#6060A0' } }
+              }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Expansion Curve ──
+        if (expansionCurve.value) {
+          const ctx = expansionCurve.value.getContext('2d')
+          const c = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: d.expansionCurve.map(x => x.label),
+              datasets: [{
+                label: '平均间隔(天)', data: d.expansionCurve.map(x => x.avgInterval),
+                backgroundColor: d.expansionCurve.map((_, i) =>
+                  `rgba(0, 240, 255, ${0.3 + i * 0.2})`)
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { y: { ticks: { color: '#6060A0', callback: v => v + '天' } },
+                        x: { ticks: { color: '#6060A0' } } }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Difficulty Zone ──
+        if (diffZone.value) {
+          const ctx = diffZone.value.getContext('2d')
+          const c = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: d.diffBucketsDetailed.map(x => x.label),
+              datasets: [{
+                label: '词数', data: d.diffBucketsDetailed.map(x => x.count),
+                backgroundColor: d.diffBucketsDetailed.map(x => {
+                  const mid = (x.lo + x.hi) / 2
+                  return mid >= 0.15 && mid < 0.35 ? 'rgba(255, 0, 255, 0.6)' : 'rgba(0, 240, 255, 0.3)'
+                }),
+                borderRadius: 2
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { y: { ticks: { color: '#6060A0' } }, x: { ticks: { color: '#6060A0' } } }
+            }
+          }); charts.push(c)
+        }
+
+        // ── Efficiency Index ──
+        if (efficiency.value) {
+          const ctx = efficiency.value.getContext('2d')
+          const c = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: d.efficiencyTimeline.map(r => r.date.slice(5)),
+              datasets: [{
+                label: '效率指数', data: d.efficiencyTimeline.map(r => r.efficiency),
+                borderColor: '#FFC83C', borderWidth: 2, tension: 0.3,
+                pointRadius: 2, pointBackgroundColor: '#FFC83C', fill: false
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { y: { min: 0, max: 1.1, ticks: { color: '#6060A0' } },
+                        x: { ticks: { color: '#6060A0', maxTicksLimit: 12 } } }
+            }
+          }); charts.push(c)
+        }
+      } catch(e) { console.error('Academic charts:', e) }
+    })
+  })
+
+    onBeforeUnmount(destroyCharts)
+
+    return { forgettingCurve, bjorkScatter, expansionCurve, diffZone, efficiency, d: props.data?.page2 }
+  },
+  template: `
+<div class="page page-academic">
+  <!-- Forgetting Curve (full width) -->
+  <div class="chart-card full-width" style="margin-bottom:20px;position:relative;">
+    <h3>Ebbinghaus 遗忘曲线 · 指数拟合</h3>
+    <div class="chart-wrap" style="position:relative;">
+      <canvas ref="forgettingCurve" height="280"></canvas>
+      <div class="stat-overlay" v-if="d.halfLife > 0">
+        <div>{{d.halfLife}}<span>天</span></div>
+        <span>记忆半衰期 t₁/₂</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bjork + Expansion -->
+  <section class="row-2col">
+    <div class="chart-card">
+      <h3>Bjork 双维模型 · 存储 vs 提取强度</h3>
+      <div class="chart-wrap"><canvas ref="bjorkScatter" height="280"></canvas></div>
+      <p class="citation">Bjork & Bjork (1992) New Theory of Disuse · 每个点代表一个单词</p>
+    </div>
+    <div class="chart-card">
+      <h3>间隔扩张曲线</h3>
+      <div class="chart-wrap"><canvas ref="expansionCurve" height="280"></canvas></div>
+      <p class="citation">横轴 = SM2 学习阶段 · 纵轴 = 平均复习间隔(天)</p>
+    </div>
+  </section>
+
+  <!-- Difficulty Zone + Efficiency -->
+  <section class="row-2col">
+    <div class="chart-card">
+      <h3>难度分布 · <span style="color:var(--neon-magenta);">合意难度区</span></h3>
+      <div class="chart-wrap"><canvas ref="diffZone" height="240"></canvas></div>
+      <p class="citation">Bjork (1994): 最佳学习发生在 difficulty 0.15-0.35 区间</p>
+    </div>
+    <div class="chart-card">
+      <h3>学习效率指数</h3>
+      <div class="chart-wrap"><canvas ref="efficiency" height="240"></canvas></div>
+      <p class="citation">效率 = (Easy+Good)/Total · 接近 1.0 = 最优</p>
+    </div>
+  </section>
+
+  <!-- Rhythm Heatmap + Hard Words -->
+  <section class="row-2col">
+    <div class="chart-card">
+      <h3>周节律热力图</h3>
+      <div class="rhythm-matrix">
+        <div class="rhythm-row">
+          <span class="rhythm-label"></span>
+          <span v-for="wd in d.weekdayNames" :key="wd" style="width:36px;text-align:center;font-size:10px;color:var(--text-dim);">{{wd}}</span>
+        </div>
+        <div v-for="row in d.rhythmMatrix" :key="row.week" class="rhythm-row">
+          <span class="rhythm-label">{{row.week.slice(5)}}</span>
+          <div v-for="wd in d.weekdayNames" :key="wd"
+               class="rhythm-cell"
+               :style="{background: getHeatColor(row[wd]), color: row[wd] !== null ? '#fff' : 'var(--text-dim)'}"
+               :title="row[wd] !== null ? row[wd] + '%' : '无数据'">
+            {{ row[wd] !== null ? Math.round(row[wd]) : '·' }}
+          </div>
+        </div>
+      </div>
+      <p class="citation" style="margin-top:8px;">颜色越绿 = 正确率越高 · 红色 = 需关注</p>
+    </div>
+    <div class="chart-card">
+      <h3>顽固词 Top {{d.hardWords.length}}</h3>
+      <table class="word-table">
+        <thead><tr><th>#</th><th>单词</th><th>释义</th><th>难度</th><th>间隔</th><th>Score</th></tr></thead>
+        <tbody>
+          <tr v-for="(w, i) in d.hardWords" :key="w.word">
+            <td style="color:var(--text-dim);">{{i + 1}}</td>
+            <td class="word-col">{{w.word}}</td>
+            <td style="color:var(--text-dim);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="w.tranCN">{{w.tranCN}}</td>
+            <td :class="w.difficulty > 0.3 ? 'diff-high' : 'diff-mid'">{{w.difficulty.toFixed(3)}}</td>
+            <td>{{w.interval}}天</td>
+            <td>{{(w.score * 100).toFixed(0)}}%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>`,
+  methods: {
+    getHeatColor(rate) {
+      if (rate === null || rate === undefined) return 'rgba(255,255,255,0.02)'
+      if (rate >= 95) return 'rgba(0, 255, 136, 0.7)'
+      if (rate >= 85) return 'rgba(0, 240, 255, 0.55)'
+      if (rate >= 70) return 'rgba(255, 200, 60, 0.45)'
+      if (rate >= 50) return 'rgba(255, 51, 85, 0.4)'
+      return 'rgba(255, 51, 85, 0.25)'
+    }
+  }
+}
+
+// ============================================================
+// AI Essay History (2026-07-22)
+// ============================================================
+const PageEssays = {
+  props: ['data'],
+  setup(props) {
+    const expandedId = ref(-1)
+    const toggle = (id) => { expandedId.value = expandedId.value === id ? -1 : id }
+
+    // 展开/收起动画 JS 钩子：基于真实 scrollHeight 做精确高度过渡
+    const onEnter = (el, done) => {
+      const h = el.scrollHeight
+      el.style.height = '0'
+      el.style.opacity = '0'
+      el.style.transform = 'translateY(-12px)'
+      el.style.transition = 'height 0.6s cubic-bezier(0.16,1,0.3,1), opacity 0.45s ease, transform 0.5s cubic-bezier(0.16,1,0.3,1)'
+      requestAnimationFrame(() => {
+        el.style.height = h + 'px'
+        el.style.opacity = '1'
+        el.style.transform = 'translateY(0)'
+      })
+      el.addEventListener('transitionend', function onEnd(e) {
+        if (e.propertyName === 'height') {
+          el.style.height = 'auto'
+          el.style.transition = 'opacity 0.2s ease, transform 0.3s ease'
+          el.removeEventListener('transitionend', onEnd)
+          done()
+        }
+      })
+    }
+    const onLeave = (el, done) => {
+      el.style.height = el.scrollHeight + 'px'
+      el.style.transition = 'height 0.4s cubic-bezier(0.5,0,0.75,0), opacity 0.3s ease, transform 0.35s cubic-bezier(0.5,0,0.75,0)'
+      requestAnimationFrame(() => {
+        el.style.height = '0'
+        el.style.opacity = '0'
+        el.style.transform = 'translateY(-8px)'
+      })
+      el.addEventListener('transitionend', function onEnd(e) {
+        if (e.propertyName === 'height') {
+          el.removeEventListener('transitionend', onEnd)
+          done()
+        }
+      })
+    }
+
+    const isEssayQ = (q) => Array.isArray(q) && q.length > 0
+    const isClozeQ = (q) => q && q.type === 'cloze'
+
+    // 删除 + 提示
+    const deleting = ref(false)
+    const toastMsg = ref('')
+    const toastType = ref('ok') // 'ok' | 'err'
+    const showToast = (msg, type = 'ok') => {
+      toastMsg.value = msg; toastType.value = type
+      setTimeout(() => { toastMsg.value = '' }, 3000)
+    }
+    const API_BASE = 'http://localhost:8765'
+    const deleteEssay = (id, idx) => {
+      if (!confirm(`确定删除短文 #${id}？此操作不可撤销。`)) return
+      deleting.value = true
+      fetch(API_BASE + '/delete-essay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (res.ok) {
+          showToast(`已删除短文 #${id}`)
+          const arr = props.data?.essayLogs
+          if (arr) arr.splice(idx, 1)
+        } else {
+          showToast('删除失败: ' + (res.error || '未知错误'), 'err')
+        }
+      })
+      .catch(() => {
+        showToast('无法连接 API 服务器（localhost:8765）。请先运行 essay_api.py', 'err')
+      })
+      .finally(() => { deleting.value = false })
+    }
+
+    // 把一篇短文（原文+翻译+题目选项+错误数+正确答案）打包成可询问 AI 的纯文本
+    const buildEssayPrompt = (log) => {
+      const cloze = isClozeQ(log.questions)
+      const attempted = log.attempted || 0
+      const correct = log.correct || 0
+      const wrong = Math.max(0, attempted - correct)
+      const lines = []
+      lines.push('【英语阅读练习复盘】')
+      lines.push('日期：' + (log.createdAt || ''))
+      lines.push('词库：' + (log.bookName || '') + ' · 目标词 ' + (log.wordCount || 0) + ' 个 · ' + (log.modelMode === 1 ? '推理模式' : '快速模式'))
+      lines.push('目标词：' + ((log.words || []).join(', ')))
+      lines.push('')
+      lines.push('—— 短文原文 ——')
+      lines.push(log.essayEN || '')
+      if (log.essayCN) {
+        lines.push('')
+        lines.push('—— 中文翻译 ——')
+        lines.push(log.essayCN)
+      }
+      lines.push('')
+      lines.push('—— 测验结果 ——')
+      lines.push('共作答 ' + attempted + ' 题，答对 ' + correct + ' 题，答错 ' + wrong + ' 题。')
+      lines.push('')
+      if (cloze) {
+        lines.push('—— 15选10 完形填空：候选词 ——')
+        const cands = (log.questions && log.questions.candidates) || []
+        const sorted = cands.slice().sort((a, b) => {
+          const ba = a.blank >= 0 ? a.blank : 999
+          const bb = b.blank >= 0 ? b.blank : 999
+          return ba - bb
+        })
+        sorted.forEach(c => {
+          if (c.blank >= 0) lines.push('[空' + (c.blank + 1) + '] ' + c.word)
+          else lines.push('[干扰词] ' + c.word)
+        })
+      } else {
+        lines.push('—— 题目与选项 ——')
+        const qs = Array.isArray(log.questions) ? log.questions : []
+        qs.forEach((q, qi) => {
+          lines.push('Q' + (qi + 1) + '. ' + (q.q || ''))
+          ;(q.choices || []).forEach((c, ci) => {
+            const mark = ci === q.answer ? '  (正确答案)' : ''
+            lines.push('   ' + String.fromCharCode(65 + ci) + '. ' + c + mark)
+          })
+          lines.push('')
+        })
+      }
+      lines.push('—— 请 AI 分析 ——')
+      lines.push('请帮我复盘这篇英语阅读练习：')
+      lines.push('1. 逐题讲解正确答案的定位依据和解题思路；')
+      lines.push('2. 归纳文中值得积累的重点词汇、短语和长难句；')
+      lines.push('3. 结合作答情况分析我的薄弱环节，给出针对性提升建议。')
+      return lines.join('\n')
+    }
+
+    const copyEssayForAI = (log) => {
+      const text = buildEssayPrompt(log)
+      const fallback = () => new Promise((resolve, reject) => {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.top = '0'
+        ta.style.left = '-9999px'
+        document.body.appendChild(ta)
+        ta.focus()
+        ta.select()
+        try {
+          const ok = document.execCommand('copy')
+          document.body.removeChild(ta)
+          ok ? resolve() : reject(new Error('copy failed'))
+        } catch (e) {
+          document.body.removeChild(ta)
+          reject(e)
+        }
+      })
+      const done = () => showToast('已复制复盘文本到剪贴板 ✅')
+      const fail = () => showToast('复制失败，请手动选择文本复制', 'err')
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(done).catch(() => {
+          fallback().then(done).catch(fail)
+        })
+      } else {
+        fallback().then(done).catch(fail)
+      }
+    }
+
+    return { expandedId, toggle, onEnter, onLeave, isEssayQ, isClozeQ, deleteEssay, deleting, toastMsg, toastType, copyEssayForAI }
+  },
+  template: `
+<div class="page page-essays">
+  <div v-if="!data.essayLogs || data.essayLogs.length === 0" class="placeholder-page">
+    <div class="placeholder-icon">🤖</div>
+    <div class="placeholder-title">暂无短文记录</div>
+    <div class="placeholder-desc">完成一次 AI 短文学习后这里会出现历史记录</div>
+  </div>
+  <div v-else>
+    <h2 style="font-family:var(--font-display);font-size:16px;color:var(--neon-cyan);margin-bottom:20px;letter-spacing:2px;">
+      🤖 AI 短文历史 · {{ data.essayLogs.length }} 篇
+    </h2>
+    <!-- Toast 通知 -->
+    <div v-if="toastMsg" class="toast-notify" :class="{ 'toast-err': toastType === 'err' }">{{ toastMsg }}</div>
+    <div v-for="(log, idx) in data.essayLogs" :key="log.id" class="essay-card" :class="{expanded: expandedId === log.id}">
+      <!-- 摘要行 -->
+      <div class="essay-summary" @click="toggle(log.id)">
+        <div class="essay-summary-left">
+          <span class="essay-type-badge" :class="isClozeQ(log.questions) ? 'type-cloze' : 'type-reading'">
+            {{ isClozeQ(log.questions) ? '🔤 15选10' : '📖 阅读理解' }}
+          </span>
+          <span class="essay-date">{{ log.createdAt }}</span>
+          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ log.correct || 0 }}/{{ isClozeQ(log.questions) ? (log.attempted || 10) : (log.attempted || 3) }}正确</span>
+        </div>
+        <div class="essay-summary-right">
+          <span class="essay-snippet">{{ (log.essayEN || '').substring(0, 120) }}{{ (log.essayEN || '').length > 120 ? '...' : '' }}</span>
+          <button class="essay-copy-btn" @click.stop="copyEssayForAI(log)" title="打包成文本复制到剪贴板，用于询问 AI">📋 复制</button>
+          <button class="essay-delete-btn" @click.stop="deleteEssay(log.id, idx)" :disabled="deleting" title="删除此篇短文">🗑️</button>
+          <span class="essay-toggle">{{ expandedId === log.id ? '▲' : '▼' }}</span>
+        </div>
+      </div>
+      <!-- 展开详情（JS 驱动高度动画，基于真实 scrollHeight） -->
+      <transition :css="false" @enter="onEnter" @leave="onLeave">
+        <div class="essay-detail" v-if="expandedId === log.id">
+        <div class="essay-section">
+          <h4>📝 目标词</h4>
+          <p class="essay-words">{{ (log.words || []).join(', ') }}</p>
+        </div>
+        <div class="essay-section">
+          <h4>📖 短文</h4>
+          <p class="essay-text">{{ log.essayEN }}</p>
+        </div>
+        <div class="essay-section" v-if="log.essayCN">
+          <h4>🌐 翻译</h4>
+          <p class="essay-text-cn">{{ log.essayCN }}</p>
+        </div>
+        <!-- 选择题题目 -->
+        <div class="essay-section" v-if="isEssayQ(log.questions)">
+          <h4>❓ 题目 ({{ log.correct || 0 }}/{{ log.attempted || log.questions.length }} 正确)</h4>
+          <div v-for="(q, qi) in log.questions" :key="qi" class="essay-question">
+            <p class="eq-text">Q{{ qi + 1 }}. {{ q.q }}</p>
+            <div class="eq-choices">
+              <span v-for="(c, ci) in q.choices" :key="ci"
+                    class="eq-choice"
+                    :class="{ correct: ci === q.answer }">
+                {{ String.fromCharCode(65 + ci) }}. {{ c }}
+              </span>
+            </div>
+          </div>
+        </div>
+        <!-- 15选10 候选词 -->
+        <div class="essay-section" v-if="isClozeQ(log.questions)">
+          <h4>🔤 候选词 (15选10 · {{ log.correct || 0 }}/{{ log.attempted || 10 }} 正确)</h4>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+            <span v-for="(c, ci) in log.questions.candidates" :key="ci"
+                  class="cloze-chip"
+                  :class="{ 'cloze-correct': c.blank >= 0, 'cloze-distractor': c.blank < 0 }">
+              {{ c.word }}<span v-if="c.blank >= 0" class="cloze-blank-tag">[{{ c.blank + 1 }}]</span>
+            </span>
+          </div>
+          <p style="font-size:10px;color:var(--text-dim);">
+            <span style="color:var(--neon-green);">● 正确词（填入空位）</span> &nbsp;
+            <span style="color:var(--neon-red);">● 干扰词</span>
+          </p>
+        </div>
+      </div>
+      </transition>
+    </div>
+  </div>
+</div>`
+}
+
+// ============================================================
+// Placeholder Page (future tabs)
+// ============================================================
+const PagePlaceholder = {
+  props: ['data'],
+  computed: {
+    info() {
+      const map = {
+        essay: { icon: '🤖', title: 'AI 短文分析', desc: '短文效能评分 · 语境记忆增益 · A/B 对照实验',
+                  detail: '每篇 AI 短文生成后追踪文中目标词的后续复习表现，量化语境化学习相对于孤立记忆的增益效果。包含遗忘曲线驱动优先队列、难度自适应引擎、情绪曲线注入等闭环机制。' },
+        galaxy: { icon: '🌌', title: '词汇星系', desc: '语义共现网络图 · 知识图谱生长动画',
+                  detail: '基于 AI 短文中的词共现频率构建语义网络。每个已学词是一个发光节点，同一篇短文中出现的词之间有连线。每读一篇新短文，星系中亮起新的连接。' },
+        insight: { icon: '🧬', title: '深度洞察', desc: 'IRT 项目反应理论 · ML 预测模型 · 个性化建议',
+                  detail: '拟合 3PL 模型估算每个词的客观难度、区分度和猜测参数。基于 SM2+ 历史轨迹训练 XGBoost 预测遗忘概率，主动推送高风险词。' }
+      }
+      return map[this.data?.tab] || map.essay
+    }
+  },
+  template: `
+<div class="page placeholder-page">
+  <div class="placeholder-icon">{{info.icon}}</div>
+  <div class="placeholder-title">{{info.title}}</div>
+  <div class="placeholder-desc">機能開発中 · 敬请期待</div>
+  <div class="placeholder-preview">
+    <h4>{{info.desc}}</h4>
+    <p>{{info.detail}}</p>
+  </div>
+</div>`
+}
+
+// ============================================================
+// Root Application
+// ============================================================
+const App = {
+  setup() {
+    const tabs = [
+      { id: 'overview', label: '⚡ 概览', available: true },
+      { id: 'academic', label: '🧬 学术', available: true },
+      { id: 'essay', label: '🤖 AI 短文', available: true },
+      { id: 'galaxy', label: '🌌 词汇星系', available: false },
+      { id: 'insight', label: '🧠 深度洞察', available: false },
+    ]
+
+    const currentTab = ref('overview')
+    const data = reactive(appData)
+
+    // Inject current tab into data for placeholder
+    const pageData = computed(() => ({
+      ...data,
+      tab: currentTab.value
+    }))
+
+    return { tabs, currentTab, data: pageData }
+  }
+}
+
+const app = createApp(App)
+app.component('StarfieldBg', StarfieldBg)
+app.component('PageOverview', PageOverview)
+app.component('PageAcademic', PageAcademic)
+app.component('PageEssays', PageEssays)
+app.component('PagePlaceholder', PagePlaceholder)
+
+// 错误捕获——渲染到页面而非静默吞掉
+app.config.errorHandler = (err, instance, info) => {
+  const el = document.getElementById('app')
+  if (el) {
+    const errDiv = document.createElement('div')
+    errDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#330000;color:#FF3355;padding:16px;font-family:monospace;font-size:12px;white-space:pre-wrap;border-bottom:2px solid #FF3355;max-height:50vh;overflow-y:auto;'
+    errDiv.textContent = '[Vue Error] ' + (err.message || err) + '\n\nInfo: ' + (info || 'unknown') + '\n\nStack: ' + (err.stack || 'none')
+    el.parentNode.insertBefore(errDiv, el)
+  }
+  console.error('[Vue]', err, info)
+}
+
+// 手动 try/catch mount
+try {
+  app.mount('#app')
+  console.log('[Dashboard] Mount OK')
+} catch(e) {
+  console.error('[Dashboard] Mount failed:', e)
+  const el = document.getElementById('app')
+  if (el) {
+    el.innerHTML = '<div style="color:#FF3355;padding:40px;text-align:center;"><h1>Mount Failed</h1><pre style="font-size:12px;">' + (e.message || e) + '</pre></div>'
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,108 @@
+<Window x:Class="ToastFish.View.StatsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ToastFish · 学习报告" Height="380" Width="400"
+        ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
+        Background="#FAFAFA">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 标题 -->
+        <TextBlock Grid.Row="0" Text="今日学习报告" FontSize="18" FontWeight="Bold"
+                   FontFamily="Microsoft YaHei UI" HorizontalAlignment="Center" Margin="0,10,0,5"/>
+
+        <!-- 复习词数大数字 -->
+        <TextBlock Grid.Row="1" x:Name="TotalWordsText" Text="0 词" FontSize="28" FontWeight="Bold"
+                   FontFamily="Microsoft YaHei UI" Foreground="#1565C0" HorizontalAlignment="Center" Margin="0,5"/>
+
+        <!-- 得分分布条形图 -->
+        <StackPanel Grid.Row="2" Margin="30,10,30,5">
+            <!-- 牢记 -->
+            <Grid Height="28" Margin="0,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="40"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="牢记" FontSize="12" FontFamily="Microsoft YaHei UI" VerticalAlignment="Center"/>
+                <Border Grid.Column="1" Height="20" CornerRadius="2" ClipToBounds="True" Margin="5,0">
+                    <Grid>
+                        <Border x:Name="EasyBar" Background="#4CAF50" HorizontalAlignment="Left" Width="0" CornerRadius="2"/>
+                    </Grid>
+                </Border>
+                <TextBlock Grid.Column="2" x:Name="EasyText" Text="0 (0%)" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center"/>
+            </Grid>
+
+            <!-- 记住 -->
+            <Grid Height="28" Margin="0,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="40"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="记住" FontSize="12" FontFamily="Microsoft YaHei UI" VerticalAlignment="Center"/>
+                <Border Grid.Column="1" Height="20" CornerRadius="2" ClipToBounds="True" Margin="5,0">
+                    <Grid>
+                        <Border x:Name="GoodBar" Background="#8BC34A" HorizontalAlignment="Left" Width="0" CornerRadius="2"/>
+                    </Grid>
+                </Border>
+                <TextBlock Grid.Column="2" x:Name="GoodText" Text="0 (0%)" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center"/>
+            </Grid>
+
+            <!-- 模糊 -->
+            <Grid Height="28" Margin="0,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="40"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="模糊" FontSize="12" FontFamily="Microsoft YaHei UI" VerticalAlignment="Center"/>
+                <Border Grid.Column="1" Height="20" CornerRadius="2" ClipToBounds="True" Margin="5,0">
+                    <Grid>
+                        <Border x:Name="HardBar" Background="#FF9800" HorizontalAlignment="Left" Width="0" CornerRadius="2"/>
+                    </Grid>
+                </Border>
+                <TextBlock Grid.Column="2" x:Name="HardText" Text="0 (0%)" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center"/>
+            </Grid>
+
+            <!-- 忘记 -->
+            <Grid Height="28" Margin="0,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="40"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="忘记" FontSize="12" FontFamily="Microsoft YaHei UI" VerticalAlignment="Center"/>
+                <Border Grid.Column="1" Height="20" CornerRadius="2" ClipToBounds="True" Margin="5,0">
+                    <Grid>
+                        <Border x:Name="AgainBar" Background="#F44336" HorizontalAlignment="Left" Width="0" CornerRadius="2"/>
+                    </Grid>
+                </Border>
+                <TextBlock Grid.Column="2" x:Name="AgainText" Text="0 (0%)" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center"/>
+            </Grid>
+        </StackPanel>
+
+        <!-- 分隔线 -->
+        <Separator Grid.Row="3" Margin="30,8" />
+
+        <!-- 进度信息 -->
+        <StackPanel Grid.Row="4" HorizontalAlignment="Center" Margin="0,5">
+            <TextBlock x:Name="ProgressText" Text="总进度: CET6_3  0/0 (0%)" FontSize="12"
+                       FontFamily="Microsoft YaHei UI" HorizontalAlignment="Center"/>
+            <TextBlock x:Name="StreakText" Text="连续学习: 0 天" FontSize="12"
+                       FontFamily="Microsoft YaHei UI" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+        </StackPanel>
+
+        <!-- 关闭按钮 -->
+        <Button Grid.Row="5" Content="好的, 继续努力" Width="160" Height="32"
+                FontSize="13" FontFamily="Microsoft YaHei UI" Click="CloseButton_Click"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,10"/>
+    </Grid>
+</Window>

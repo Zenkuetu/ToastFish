@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimal Roslyn compiler integration for MSBuild 4.0 -->
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <Target Name="CoreCompile"
+          Inputs="$(MSBuildAllProjects);
+                  @(Compile);
+                  @(_CoreCompileResourceInputs);
+                  $(ApplicationIcon);
+                  $(AssemblyOriginatorKeyFile);
+                  @(ReferencePathWithRefAssemblies);
+                  @(CompiledLicenseFile);
+                  @(LinkResource);
+                  @(EmbeddedDocumentation);
+                  $(Win32Resource);
+                  $(Win32Manifest);
+                  @(CustomAdditionalCompileInputs);
+                  $(ResolvedCodeAnalysisRuleSet)"
+          Outputs="@(DocFileItem);
+                   @(IntermediateAssembly);
+                   @(_DebugSymbolsIntermediatePath);
+                   $(NonExistentFile);
+                   @(CustomAdditionalCompileOutputs)"
+          Returns="@(CscCommandLineArgs)"
+          DependsOnTargets="$(CoreCompileDependsOn)">
+    <PropertyGroup Condition="('$(TargetFrameworkVersion)' != 'v1.0') and ('$(TargetFrameworkVersion)' != 'v1.1')">
+      <NoWarn>$(NoWarn);1701;1702</NoWarn>
+    </PropertyGroup>
+
+    <PropertyGroup>
+      <NoWarn Condition="'$(BuildingInsideVisualStudio)' == 'true' AND '$(VisualStudioVersion)' != '' AND '$(VisualStudioVersion)' &gt; '10.0'">$(NoWarn);2008</NoWarn>
+    </PropertyGroup>
+
+    <!-- Use Roslyn compiler via ToolPath override -->
+    <Csc Condition="'%(_CoreCompileResourceInputs.WithCulture)' != 'true'"
+         AdditionalLibPaths="$(AdditionalLibPaths)"
+         AddModules="@(AddModules)"
+         AllowUnsafeBlocks="$(AllowUnsafeBlocks)"
+         BaseAddress="$(BaseAddress)"
+         CheckForOverflowUnderflow="$(CheckForOverflowUnderflow)"
+         CodePage="$(CodePage)"
+         DebugType="$(DebugType)"
+         DefineConstants="$(DefineConstants)"
+         DelaySign="$(DelaySign)"
+         DisabledWarnings="$(NoWarn)"
+         DocumentationFile="@(DocFileItem)"
+         EmitDebugInformation="$(DebugSymbols)"
+         ErrorReport="$(ErrorReport)"
+         FileAlignment="$(FileAlignment)"
+         GenerateFullPaths="$(GenerateFullPaths)"
+         HighEntropyVA="$(HighEntropyVA)"
+         KeyContainer="$(KeyContainerName)"
+         KeyFile="$(KeyOriginatorFile)"
+         LangVersion="$(LangVersion)"
+         LinkResources="@(LinkResource)"
+         MainEntryPoint="$(StartupObject)"
+         ModuleAssemblyName="$(ModuleAssemblyName)"
+         NoConfig="true"
+         NoLogo="$(NoLogo)"
+         NoStandardLib="$(NoCompilerStandardLib)"
+         NoWin32Manifest="$(NoWin32Manifest)"
+         Optimize="$(Optimize)"
+         OutputAssembly="@(IntermediateAssembly)"
+         PdbFile="$(PdbFile)"
+         Platform="$(PlatformTarget)"
+         Prefer32Bit="$(Prefer32Bit)"
+         References="@(ReferencePathWithRefAssemblies)"
+         Resources="@(_CoreCompileResourceInputs);@(CompiledLicenseFile)"
+         ResponseFiles="$(CompilerResponseFile)"
+         Sources="@(Compile)"
+         SubsystemVersion="$(SubsystemVersion)"
+         TargetType="$(OutputType)"
+         ToolExe="$(CscToolExe)"
+         ToolPath="$(CscToolPath)"
+         TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
+         WarningLevel="$(WarningLevel)"
+         WarningsAsErrors="$(WarningsAsErrors)"
+         WarningsNotAsErrors="$(WarningsNotAsErrors)"
+         Win32Icon="$(ApplicationIcon)"
+         Win32Manifest="$(Win32Manifest)"
+         Win32Resource="$(Win32Resource)">
+      <Output TaskParameter="CommandLineArgs" ItemName="CscCommandLineArgs" />
+    </Csc>
+
+    <ItemGroup>
+      <_CoreCompileResourceInputs Remove="@(_CoreCompileResourceInputs)" />
+    </ItemGroup>
+
+    <CallTarget Targets="$(TargetsTriggeredByCompilation)" Condition="'$(TargetsTriggeredByCompilation)' != ''" />
+  </Target>
+</Project>
