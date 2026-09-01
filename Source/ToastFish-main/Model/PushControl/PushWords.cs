@@ -1245,6 +1245,24 @@ namespace ToastFish.Model.PushControl
         }
 
         /// <summary>
+        /// AI 生成超过 180 秒时询问用户是否继续等待（2026-09-01 新增）。
+        /// 返回 true=继续等待，false=立即终止。弹窗超时/异常默认「继续等待」，不打断学习。
+        /// </summary>
+        private static bool AskContinueOrAbort()
+        {
+            try
+            {
+                Task<int> t = ToastBridge.ShowInteractive(
+                    "AI 生成时间较长",
+                    "已超过 3 分钟仍未完成，是否继续等待？",
+                    new[] { "继续等待", "立即终止" }, 30000);
+                if (!t.Wait(35000)) return true;   // 弹窗未正常返回：兜底继续等待
+                return t.Result != 1;               // 0=继续、-1=超时未点 → 继续；1=立即终止
+            }
+            catch { return true; }
+        }
+
+        /// <summary>
         /// 学后微阅读（2026-07-17 新增 / 2026-07-21 重构）：
         /// AI 短文支持后台预生成 + 阅读前信息页 + 读后 SM2+ 自适应反馈。
         /// finishedCards 用于获取本轮最新的 difficulty 值（而非 Word 对象中可能过期的值）。
@@ -1284,7 +1302,8 @@ namespace ToastFish.Model.PushControl
                         {
                             PushMessage("AI 正在生成 15 选 10 完形填空...");
                             int elapsed = 0;
-                            const int ABORT_TIMEOUT_MS = 180000;   // 生成"不限时"，180 秒兜底主动停止
+                            bool asked = false;                    // 已询问过用户则不再重复询问
+                            const int ABORT_TIMEOUT_MS = 180000;   // 生成"不限时"，180 秒后询问是否继续
                             while (!clozeTask.IsCompleted)
                             {
                                 if (clozeTask.Wait(5000)) break;
@@ -1296,11 +1315,18 @@ namespace ToastFish.Model.PushControl
                                     if (s.Length > 80) s = "…" + s.Substring(s.Length - 80);
                                     PushMessage("AI 思考: " + s);
                                 }
-                                if (elapsed >= ABORT_TIMEOUT_MS)
+                                if (!asked && elapsed >= ABORT_TIMEOUT_MS)
                                 {
-                                    // 180 秒超时：主动中止 HTTP + 记录失败原因 + 弹窗
+                                    asked = true;
+                                    if (AskContinueOrAbort())
+                                    {
+                                        // 用户选择继续等待（或超时未点）：不再询问，等 HTTP 层 600s 超时/降级兜底
+                                        PushMessage("已继续等待 AI 生成...");
+                                        continue;
+                                    }
+                                    // 用户选择立即终止：主动中止 HTTP + 记录失败原因
                                     Model.Ai.EssayGenerator.AbortActiveRequest();
-                                    string reason = "生成超时（>180 秒），主动停止";
+                                    string reason = "生成超时（>180 秒），用户终止";
                                     string diag = Model.Ai.EssayGenerator.LiveDiag;
                                     string thinking = Model.Ai.EssayGenerator.LiveThinking;
                                     if (!string.IsNullOrEmpty(thinking))
@@ -1310,11 +1336,17 @@ namespace ToastFish.Model.PushControl
                                         reason += " 思考:" + s;
                                     }
                                     if (!string.IsNullOrEmpty(diag)) reason += " " + diag;
-                                    lock (_essayPreFetchLock) { _clozePreFetchError = reason; }
+                                    // 已生成则保留结果、不弹「已停止」；仅未就绪时标记终止（2026-09-01 与 ESSAY 统一）
+                                    bool clozeDone;
+                                    lock (_essayPreFetchLock)
+                                    {
+                                        clozeDone = (_clozePreFetchResult != null);
+                                        if (!clozeDone) _clozePreFetchError = reason;
+                                    }
                                     try { System.IO.File.AppendAllText(
                                         System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "Resources", "ai_diag.log"),
                                         DateTime.Now + "\nCLOZE " + reason + "\n"); } catch { }
-                                    PushMessage("AI 生成超时（180 秒），已主动停止本次生成");
+                                    if (!clozeDone) PushMessage("已停止本次 AI 生成");
                                     break;
                                 }
                             }
@@ -1389,7 +1421,8 @@ namespace ToastFish.Model.PushControl
                     {
                         PushMessage("AI 正在生成短文...");
                         int elapsed = 0;
-                        const int ABORT_TIMEOUT_MS = 180000;   // 生成"不限时"，180 秒兜底主动停止
+                        bool asked = false;                    // 已询问过用户则不再重复询问
+                        const int ABORT_TIMEOUT_MS = 180000;   // 生成"不限时"，180 秒后询问是否继续
                         while (!essayTask.IsCompleted)
                         {
                             if (essayTask.Wait(5000)) break;
@@ -1401,11 +1434,18 @@ namespace ToastFish.Model.PushControl
                                 if (s.Length > 80) s = "…" + s.Substring(s.Length - 80);
                                 PushMessage("AI 思考: " + s);
                             }
-                            if (elapsed >= ABORT_TIMEOUT_MS)
+                            if (!asked && elapsed >= ABORT_TIMEOUT_MS)
                             {
-                                // 180 秒超时：主动中止 HTTP + 记录失败原因 + 弹窗
+                                asked = true;
+                                if (AskContinueOrAbort())
+                                {
+                                    // 用户选择继续等待（或超时未点）：不再询问，等 HTTP 层 600s 超时/降级兜底
+                                    PushMessage("已继续等待 AI 生成...");
+                                    continue;
+                                }
+                                // 用户选择立即终止：主动中止 HTTP + 记录失败原因
                                 Model.Ai.EssayGenerator.AbortActiveRequest();
-                                string reason = "生成超时（>180 秒），主动停止";
+                                string reason = "生成超时（>180 秒），用户终止";
                                 string diag = Model.Ai.EssayGenerator.LiveDiag;
                                 string thinking = Model.Ai.EssayGenerator.LiveThinking;
                                 if (!string.IsNullOrEmpty(thinking))
@@ -1415,11 +1455,18 @@ namespace ToastFish.Model.PushControl
                                     reason += " 思考:" + s;
                                 }
                                 if (!string.IsNullOrEmpty(diag)) reason += " " + diag;
-                                lock (_essayPreFetchLock) { _essayPreFetchResult = new EssayPreFetchResult { Success = false, Result = null, Error = reason, EssayWords = null }; }
+                                // 已生成则保留结果、不弹「已停止」；仅未就绪时标记终止（2026-09-01 与 CLOZE 统一）
+                                bool essayDone;
+                                lock (_essayPreFetchLock)
+                                {
+                                    essayDone = (_essayPreFetchResult != null);
+                                    if (!essayDone)
+                                        _essayPreFetchResult = new EssayPreFetchResult { Success = false, Result = null, Error = reason, EssayWords = null };
+                                }
                                 try { System.IO.File.AppendAllText(
                                     System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "Resources", "ai_diag.log"),
                                     DateTime.Now + "\n" + reason + "\n"); } catch { }
-                                PushMessage("AI 生成超时（180 秒），已主动停止本次生成");
+                                if (!essayDone) PushMessage("已停止本次 AI 生成");
                                 break;
                             }
                         }

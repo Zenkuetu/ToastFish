@@ -597,7 +597,27 @@ namespace ToastFish.View
                 timer.Start();
                 form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
 
-                form.FormClosed += (s, e) => { if (_current == form) _current = null; _isHidden = false; form.Dispose(); timer.Dispose(); };
+                // 快捷键：复用全局热键 ALT+1/2/3/4 → 按钮 0/1/2/3（2026-09-01 新增）
+                IDisposable hotkeySub = null;
+                try
+                {
+                    hotkeySub = Model.PushControl.PushWords.HotKeytObservable.Subscribe(key =>
+                    {
+                        int sel = -1;
+                        if (key == "1") sel = 0;
+                        else if (key == "2") sel = 1;
+                        else if (key == "3") sel = 2;
+                        else if (key == "4") sel = 3;
+                        if (sel >= 0 && sel < buttonLabels.Length)
+                        {
+                            tcs.TrySetResult(sel);
+                            form.Close();
+                        }
+                    });
+                }
+                catch { }
+
+                form.FormClosed += (s, e) => { hotkeySub?.Dispose(); if (_current == form) _current = null; _isHidden = false; form.Dispose(); timer.Dispose(); };
 
                 _isHidden = false;
                 _current = form;
