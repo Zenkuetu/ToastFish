@@ -297,9 +297,13 @@ namespace ToastFish.Model.SqliteControl
             {
                 try
                 {
+                    // Step1/Step2 词未进入 Reviewed，dateLastReviewed 为 default(0001-01-01) 时写 NULL，避免写入无效日期
+                    string dlr = (card.dateLastReviewed == default(DateTime) || card.dateLastReviewed.Year <= 1)
+                        ? "NULL"
+                        : "'" + card.dateLastReviewed.ToString("yyyy/M/d H:m:s") + "'";
                     String Command = $"UPDATE {TABLE_NAME} SET status = {(int)card.status}, " +
                         $"difficulty ={card.difficulty}, daysBetweenReviews ={card.daysBetweenReviews}, " +
-                        $"lastScore ={card.lastScore}, dateLastReviewed ='{card.dateLastReviewed}' " +
+                        $"lastScore ={card.lastScore}, dateLastReviewed ={dlr} " +
                         $"WHERE wordRank = {card.word.wordRank};";
                     Update.CommandText = Command;
                     Update.ExecuteNonQuery();

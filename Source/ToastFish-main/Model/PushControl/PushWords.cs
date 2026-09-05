@@ -754,6 +754,11 @@ namespace ToastFish.Model.PushControl
             while (LearningCardLst.Count != 0)
             {
                 Card Cardj = LearningCardLst[0];
+                // 没到期的词留在 LearningCardLst 等下次学习，避免答 Again/Hard 后立即反复弹（死循环）
+                if (!Cardj.isDue())
+                {
+                    break;
+                }
                 Score = pushWords.pushCard(Cardj, Cardj.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
                 if (Score == -1)
                 {
@@ -780,6 +785,7 @@ namespace ToastFish.Model.PushControl
 
             Debug.WriteLine($"更新数据库 @{DateTime.Now}");
             Query.updateCardDateBase(FinishedCardLst);
+            Query.updateCardDateBase(LearningCardLst);  // 同时写入 Step1/Step2 词（status=1/2），避免进度丢失
             Query.SyncCountTable();  // 同步 Count 表，确保进度计数实时准确
             Debug.WriteLine($"数据库更新完毕 @{DateTime.Now}");
 
