@@ -88,8 +88,8 @@ namespace ToastFish.Model.PushControl
         }
         #endregion
 
-        /// <summary>后台刷新学习仪表盘 HTML（2026-07-22）。失败静默，不影响学习流程。</summary>
-        private static void RefreshDashboard()
+        /// <summary>刷新学习仪表盘 HTML（2026-07-22）。失败静默，不影响学习流程。timeoutMs 为等待 Python 的超时。</summary>
+        public static void RefreshDashboard(int timeoutMs = 45000)
         {
             try
             {
@@ -109,8 +109,8 @@ namespace ToastFish.Model.PushControl
                 using (var p = System.Diagnostics.Process.Start(psi))
                 {
                     if (p == null) return;
-                    // 等待最多 45 秒，超时就杀（AI 模式下的 WAL 积压最多让查询慢几秒）
-                    if (!p.WaitForExit(45000))
+                    // 等待最多 timeoutMs 毫秒，超时就杀（AI 模式下的 WAL 积压最多让查询慢几秒）
+                    if (!p.WaitForExit(timeoutMs))
                     {
                         try { p.Kill(); } catch { }
                         Debug.WriteLine("RefreshDashboard: Python 超时已终止");

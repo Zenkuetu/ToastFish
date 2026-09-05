@@ -834,6 +834,10 @@ namespace ToastFish
         }
         private void Dashboard_Click(object sender, EventArgs e)
         {
+            // 先重新生成仪表盘，反映当前词库的最新进度（2026-09-05）。
+            // 否则切换词库后打开会显示旧的 dashboard.html（仍是上一个词库的数据）。
+            PushWords.RefreshDashboard(15000);
+
             string dashboardPath = System.IO.Path.Combine(
                 System.AppDomain.CurrentDomain.BaseDirectory,
                 "Resources", "dashboard.html");
