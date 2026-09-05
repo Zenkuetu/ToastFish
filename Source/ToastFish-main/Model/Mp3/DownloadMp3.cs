@@ -96,41 +96,49 @@ namespace ToastFish.Model.Download
                 bool flag = Download.HttpDownload("https://dict.youdao.com/dictvoice?audio=" + TempSpeech[1], TempSpeech[0]);
                 if (flag != true) ret = false;
             }
-            if (ret) ret = PlayMp3Trimmed(mp3_full_name);
+            if (ret) ret = PlayOriginalWithLeadSilence(mp3_full_name);
             return ret;
         }
 
         /// <summary>
-        /// 用 MP3Sharp 解码 MP3 → 构造 WAV → SoundPlayer 播放。
-        /// 最简洁方案：不解码降采样、不裁剪静音，仅在发音前垫 1 秒空音规避设备启动吞开头。
-        /// MP3Sharp 输出采样率是 freq 的 2 倍，WAV 头写 freq×2。
+        /// 播放单词音频：MP3 走 MP3Sharp 解码、WAV 直接解析，统一构建 WAV（前置 1 秒空音）后 SoundPlayer 播放。
+        /// MP3Sharp 输出采样率：mono 是 Frequency×2（每采样重复一次）、stereo 是 Frequency×1（实测 MPEG1 mono ratio 精确 2.0、stereo 精确 1.0）。
+        /// 有道对部分单词返回 WAV（扩展名仍 .mp3），由 IsWavFile 识别后直接读 fmt 采样率。
         /// </summary>
-        private static bool PlayMp3Trimmed(string path)
+        private static bool PlayOriginalWithLeadSilence(string path)
         {
             try
             {
                 byte[] pcm;
                 int freq, ch;
-                using (var mp3 = new MP3Sharp.MP3Stream(path))
+                if (IsWavFile(path))
                 {
-                    freq = mp3.Frequency;
-                    ch = mp3.ChannelCount;
-                    using (var ms = new MemoryStream())
+                    // WAV：fmt chunk 里的采样率就是正确值
+                    ParseWav(path, out freq, out ch, out pcm);
+                }
+                else
+                {
+                    using (var mp3 = new MP3Sharp.MP3Stream(path))
                     {
-                        byte[] buf = new byte[4096];
-                        int n;
-                        while ((n = mp3.Read(buf, 0, buf.Length)) > 0)
-                            ms.Write(buf, 0, n);
-                        pcm = ms.ToArray();
+                        ch = mp3.ChannelCount;
+                        freq = mp3.Frequency;
+                        using (var ms = new MemoryStream())
+                        {
+                            byte[] buf = new byte[4096];
+                            int n;
+                            while ((n = mp3.Read(buf, 0, buf.Length)) > 0)
+                                ms.Write(buf, 0, n);
+                            pcm = ms.ToArray();
+                        }
                     }
+                    // MP3Sharp 对 mono 输出采样率 ×2、stereo ×1
+                    freq = (ch == 1) ? freq * 2 : freq;
                 }
                 if (pcm == null || pcm.Length < 44) return false;
 
-                // MP3Sharp 输出采样率是 freq 的 2 倍，WAV 头需写 freq×2（否则减速/音调错）
-                int actualFreq = freq * 2;
-                // 前置 1 秒空音：规避播放器/音频设备启动时吞掉开头音频的问题
-                int leadBytes = actualFreq * ch * 2 * 1000 / 1000;
-                byte[] wav = BuildWav(actualFreq, ch, pcm, 0, pcm.Length, leadBytes);
+                // 前置 1 秒空音：规避 USB DAC 启动吞开头约 0.5 秒音频的问题
+                int leadBytes = freq * ch * 2;
+                byte[] wav = BuildWav(freq, ch, pcm, 0, pcm.Length, leadBytes);
 
                 using (var stream = new MemoryStream(wav))
                 using (var player = new System.Media.SoundPlayer(stream))
@@ -143,13 +151,59 @@ namespace ToastFish.Model.Download
             return false;
         }
 
+        /// <summary>判断文件是否为 WAV（RIFF....WAVE 头）。有道对部分单词返回 WAV 却存成 .mp3 扩展名。</summary>
+        private static bool IsWavFile(string path)
+        {
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    byte[] head = new byte[12];
+                    if (fs.Read(head, 0, head.Length) < head.Length) return false;
+                    return head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F'
+                        && head[8] == 'W' && head[9] == 'A' && head[10] == 'V' && head[11] == 'E';
+                }
+            }
+            catch { return false; }
+        }
+
+        /// <summary>解析 WAV 的 fmt/data chunk，取出 16-bit PCM 数据、采样率、声道。</summary>
+        private static void ParseWav(string path, out int freq, out int ch, out byte[] pcm)
+        {
+            byte[] raw = File.ReadAllBytes(path);
+            freq = 0; ch = 0; pcm = null;
+            int dataOffset = -1, dataLen = 0;
+            int pos = 12;
+            while (pos + 8 <= raw.Length)
+            {
+                string id = Encoding.ASCII.GetString(raw, pos, 4);
+                int size = BitConverter.ToInt32(raw, pos + 4);
+                if (id == "fmt ")
+                {
+                    ch = BitConverter.ToInt16(raw, pos + 10);
+                    freq = BitConverter.ToInt32(raw, pos + 12);
+                }
+                else if (id == "data")
+                {
+                    dataOffset = pos + 8;
+                    dataLen = size;
+                    break;
+                }
+                pos += 8 + size + (size & 1);
+            }
+            if (dataOffset < 0 || dataLen <= 0 || freq <= 0 || ch <= 0) return;
+            int copy = Math.Min(dataLen, raw.Length - dataOffset);
+            pcm = new byte[copy];
+            Array.Copy(raw, dataOffset, pcm, 0, copy);
+        }
+
         /// <summary>构造标准 44 字节 WAV 头 + 16-bit PCM 数据（signed little-endian，采样率=freq）。</summary>
         private static byte[] BuildWav(int freq, int ch, byte[] pcm, int offset, int dataLen, int leadBytes)
         {
             int headerSize = 44;
             int totalData = leadBytes + dataLen;
             byte[] wav = new byte[headerSize + totalData];
-            int byteRate = freq * ch * 2;   // freq 已是实际输出采样率（freq×2）
+            int byteRate = freq * ch * 2;
             int blockAlign = ch * 2;
 
             wav[0] = (byte)'R'; wav[1] = (byte)'I'; wav[2] = (byte)'F'; wav[3] = (byte)'F';
@@ -166,7 +220,7 @@ namespace ToastFish.Model.Download
             wav[36] = (byte)'d'; wav[37] = (byte)'a'; wav[38] = (byte)'t'; wav[39] = (byte)'a';
             BitConverter.GetBytes(totalData).CopyTo(wav, 40);
 
-            // 前置空音（leadBytes 字节，数组默认值为 0 即静音），发音 PCM 跟在空音之后
+            // 前置空音（leadBytes 字节，默认 0 即静音），发音 PCM 跟在空音之后
             Array.Copy(pcm, offset, wav, headerSize + leadBytes, dataLen);
             return wav;
         }
