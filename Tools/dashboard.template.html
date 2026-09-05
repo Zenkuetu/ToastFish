@@ -1442,6 +1442,7 @@ const PageEssays = {
 
     const isEssayQ = (q) => Array.isArray(q) && q.length > 0
     const isClozeQ = (q) => q && q.type === 'cloze'
+    const isCloze4Q = (q) => q && q.type === 'cloze4'
 
     // 删除 + 提示
     const deleting = ref(false)
@@ -1510,6 +1511,16 @@ const PageEssays = {
         sorted.forEach(c => {
           if (c.blank >= 0) lines.push('[空' + (c.blank + 1) + '] ' + c.word)
           else lines.push('[干扰词] ' + c.word)
+        })
+      } else if (isCloze4Q(log.questions)) {
+        lines.push('—— 20空四选一 完形填空：各空选项 ——')
+        const qs = (log.questions && log.questions.questions) || []
+        qs.forEach((q, qi) => {
+          lines.push('空' + (q.blank || (qi + 1)) + '：')
+          ;(q.options || []).forEach((opt, oi) => {
+            const mark = oi === q.answer ? '  (正确答案)' : ''
+            lines.push('   ' + String.fromCharCode(65 + oi) + '. ' + opt + mark)
+          })
         })
       } else {
         lines.push('—— 题目与选项 ——')
@@ -1581,11 +1592,11 @@ const PageEssays = {
       <!-- 摘要行 -->
       <div class="essay-summary" @click="toggle(log.id)">
         <div class="essay-summary-left">
-          <span class="essay-type-badge" :class="isClozeQ(log.questions) ? 'type-cloze' : 'type-reading'">
-            {{ isClozeQ(log.questions) ? '🔤 15选10' : '📖 阅读理解' }}
+          <span class="essay-type-badge" :class="(isClozeQ(log.questions) || isCloze4Q(log.questions)) ? 'type-cloze' : 'type-reading'">
+            {{ isClozeQ(log.questions) ? '🔤 15选10' : (isCloze4Q(log.questions) ? '🔤 20空四选一' : '📖 阅读理解') }}
           </span>
           <span class="essay-date">{{ log.createdAt }}</span>
-          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ log.correct || 0 }}/{{ isClozeQ(log.questions) ? (log.attempted || 10) : (log.attempted || 3) }}正确</span>
+          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ log.correct || 0 }}/{{ isClozeQ(log.questions) ? (log.attempted || 10) : (isCloze4Q(log.questions) ? (log.attempted || 20) : (log.attempted || 3)) }}正确</span>
         </div>
         <div class="essay-summary-right">
           <span class="essay-snippet">{{ (log.essayEN || '').substring(0, 120) }}{{ (log.essayEN || '').length > 120 ? '...' : '' }}</span>
@@ -1637,6 +1648,20 @@ const PageEssays = {
             <span style="color:var(--neon-green);">● 正确词（填入空位）</span> &nbsp;
             <span style="color:var(--neon-red);">● 干扰词</span>
           </p>
+        </div>
+        <!-- 20空四选一 完形填空 -->
+        <div class="essay-section" v-if="isCloze4Q(log.questions)">
+          <h4>🔤 完形填空 (20空四选一 · {{ log.correct || 0 }}/{{ log.attempted || 20 }} 正确)</h4>
+          <div v-for="(q, qi) in log.questions.questions" :key="qi" class="essay-question">
+            <p class="eq-text">空 {{ q.blank }}：</p>
+            <div class="eq-choices">
+              <span v-for="(opt, oi) in q.options" :key="oi"
+                    class="eq-choice"
+                    :class="{ correct: oi === q.answer }">
+                {{ String.fromCharCode(65 + oi) }}. {{ opt }}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
       </transition>

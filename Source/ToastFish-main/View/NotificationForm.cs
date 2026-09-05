@@ -1872,9 +1872,9 @@ namespace ToastFish.View
                         string marker = "[" + i + "]";
                         string repl;
                         if (filledWords[i - 1] != null)
-                            repl = " ▶" + filledWords[i - 1] + "◀ "; // ▶word◀
+                            repl = " [" + filledWords[i - 1] + "] "; // ▶word◀
                         else if (selBlank == i - 1)
-                            repl = " ┌_" + i + "_┐ "; // ┌_N_┐ highlighted
+                            repl = " {_" + i + "_} "; // ┌_N_┐ highlighted
                         else
                             repl = " ___" + i + "___ ";
                         // 使用 IndexOf 精准替换，避免 Replace 的全局副作用
@@ -1903,12 +1903,12 @@ namespace ToastFish.View
                         Color clr;
                         if (filledWords[i] != null)
                         {
-                            search = "▶" + filledWords[i] + "◀";
+                            search = "[" + filledWords[i] + "]";
                             clr = Color.FromArgb(0, 255, 136); // 绿色
                         }
                         else if (selBlank == i)
                         {
-                            search = "┌_" + (i + 1) + "_┐";
+                            search = "{_" + (i + 1) + "_}";
                             clr = Color.FromArgb(255, 200, 100); // 金色
                         }
                         else
@@ -1920,7 +1920,7 @@ namespace ToastFish.View
                         if (pos >= 0)
                         {
                             rtb.Select(pos, search.Length);
-                            rtb.SelectionFont = fontPassageB;
+                            rtb.SelectionFont = fontPassage;
                             rtb.SelectionColor = clr;
                         }
                     }
@@ -2489,9 +2489,9 @@ namespace ToastFish.View
                         string marker = "[" + i + "]";
                         string repl;
                         if (filledWords[i - 1] != null)
-                            repl = " ▶" + filledWords[i - 1] + "◀ ";
+                            repl = " [" + filledWords[i - 1] + "] ";
                         else if (selBlank == i - 1)
-                            repl = " ┌_" + i + "_┐ ";
+                            repl = " {_" + i + "_} ";
                         else
                             repl = " ___" + i + "___ ";
                         int idx = t.IndexOf(marker);
@@ -2523,7 +2523,7 @@ namespace ToastFish.View
                         if (pos >= 0)
                         {
                             rtb.Select(pos, search.Length);
-                            rtb.SelectionFont = fontPassageB;
+                            rtb.SelectionFont = fontPassage;
                             rtb.SelectionColor = clr;
                         }
                     }
