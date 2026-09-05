@@ -558,7 +558,7 @@ namespace ToastFish.Model.PushControl
                             try
                             {
                                 Model.Ai.ClozeResult cr; string cerr;
-                                bool ok = Model.Ai.EssayGenerator.TryGenerateCloze(hws, out cr, out cerr);
+                                bool ok = Model.Ai.EssayGenerator.TryGenerateCloze(hws, Select.TABLE_NAME, out cr, out cerr);
                                 lock (_essayPreFetchLock)
                                 {
                                     _clozePreFetchResult = ok ? cr : null;
@@ -587,7 +587,7 @@ namespace ToastFish.Model.PushControl
                             {
                                 Model.Ai.EssayResult result;
                                 string error;
-                                bool ok = Model.Ai.EssayGenerator.TryGenerate(hws, out result, out error);
+                                bool ok = Model.Ai.EssayGenerator.TryGenerate(hws, Select.TABLE_NAME, out result, out error);
                                 string diag = ok
                                     ? ("OK en=" + (result.EssayEN != null ? result.EssayEN.Length + "chars" : "null") + " q=" + result.Questions.Count)
                                     : ("FAIL err=" + (error ?? "null") + " diag=" + (Model.Ai.EssayGenerator.LiveDiag ?? "null"));

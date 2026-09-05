@@ -120,9 +120,29 @@ namespace ToastFish.Model.Ai
         // ===== 多轮自检生成（2026-08-08 方案 C）：快速模式生成后最多追加 MAX_REVISE_ROUNDS 次修正轮 =====
         private const int MAX_REVISE_ROUNDS = 1;   // 快速模式最多修正轮数（共 2 次调用）；推理模式保持单轮
 
+        /// <summary>
+        /// 根据词库表名返回中文难度标签，用于动态生成 AI 短文 prompt（2026-09-05）。
+        /// 让短文/题目难度随当前学习的词库变化，而非固定为六级。
+        /// </summary>
+        public static string GetBookLevel(string tableName)
+        {
+            if (string.IsNullOrEmpty(tableName)) return "大学英语六级";
+            if (tableName.StartsWith("CET4")) return "大学英语四级";
+            if (tableName.StartsWith("CET6")) return "大学英语六级";
+            if (tableName.StartsWith("KaoYan")) return "考研英语";
+            if (tableName.StartsWith("GRE")) return "GRE";
+            if (tableName.StartsWith("GMAT")) return "GMAT";
+            if (tableName.StartsWith("IELTS")) return "雅思";
+            if (tableName.StartsWith("TOEFL")) return "托福";
+            if (tableName.StartsWith("SAT")) return "SAT";
+            if (tableName.StartsWith("Level4")) return "英语专业四级";
+            if (tableName.StartsWith("Level8")) return "英语专业八级";
+            return "大学英语六级";
+        }
+
         /// <summary>修正轮 system prompt（Essay 选择题版）。固定常量命中上下文缓存。模型满意回 {"ok":true} 省输出。</summary>
         private const string REVISE_PROMPT =
-            "你是英语六级阅读理解命题质量检查员。以下是 AI 生成的短文和 3 道题（JSON）。严格检查：" +
+            "你是{LEVEL}阅读理解命题质量检查员。以下是 AI 生成的短文和 3 道题（JSON）。严格检查：" +
             "1) 正确选项是否照抄原文词句（必须同义替换/改写）；" +
             "2) 干扰项是否一眼排除（必须有一定迷惑性）；" +
             "3) 3 题题型是否互不相同（细节/推理/主旨/词义/态度）；" +
@@ -135,7 +155,7 @@ namespace ToastFish.Model.Ai
 
         /// <summary>修正轮 system prompt（15选10 CLOZE 版）。</summary>
         private const string REVISE_CLOZE_PROMPT =
-            "你是英语六级选词填空命题质量检查员。以下是 AI 生成的 15选10 完形填空（JSON）。严格检查：" +
+            "你是{LEVEL}选词填空命题质量检查员。以下是 AI 生成的 15选10 完形填空（JSON）。严格检查：" +
             "1) 正文中每个空位是否被 [N] 完全替代（不得残留答案词，即禁止答案泄漏）；" +
             "2) 干扰词是否与目标空位词性一致、屈折形式一致、有真实迷惑性（不得用用户单词列表中的词作干扰词）；干扰方式是否以词性混淆/搭配不当/语义偏离为主，严格近义词干扰项是否≤1个（若大量使用近义词辨析视为命题错误，需改为搭配/语义类干扰）；" +
             "3) candidates 是否恰好 15 项（10 正确 + 5 干扰），blank 1~10 为正确、-1 为干扰；" +
@@ -241,7 +261,7 @@ namespace ToastFish.Model.Ai
             return content;
         }
 
-        public static bool TryGenerate(List<string> words, out EssayResult result, out string error)
+        public static bool TryGenerate(List<string> words, string bookName, out EssayResult result, out string error)
         {
             result = null; error = null;
             LiveError = null;
@@ -257,8 +277,8 @@ namespace ToastFish.Model.Ai
                 const string SYS_PROMPT =
                     "用户给出英语单词列表。完成两件事：" +
                     "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文（120~180词），" +
-                    "文体贴近大学英语六级阅读：有具体细节、因果/转折等逻辑关系，避免流水账。" +
-                    "2)根据短文出3道六级水准的英文阅读理解单选题，命题要求：" +
+                    "文体贴近{LEVEL}阅读：有具体细节、因果/转折等逻辑关系，避免流水账。" +
+                    "2)根据短文出3道{LEVEL}水准的英文阅读理解单选题，命题要求：" +
                     "a.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
                     "b.干扰项要有迷惑性——可用原文出现过的词但表述错误、偷换概念、张冠李戴或过度推断，禁止一眼排除的选项；" +
                     "c.3题题型必须不同，从中选取：细节理解、推理判断(infer/imply/suggest)、主旨大意、词义猜测(the word \\\"X\\\" most likely means)、作者态度；" +
@@ -274,8 +294,8 @@ namespace ToastFish.Model.Ai
                     "用户给出英语单词列表。完成两件事：" +
                     "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文，不设字数限制，" +
                     "篇幅按内容需要自由发挥、充分展开，不必刻意精简，" +
-                    "文体贴近大学英语六级阅读：有具体细节、因果/转折等逻辑关系，内容有深度、值得一读，避免流水账。" +
-                    "2)根据短文出3道六级水准的英文阅读理解单选题，命题要求：" +
+                    "文体贴近{LEVEL}阅读：有具体细节、因果/转折等逻辑关系，内容有深度、值得一读，避免流水账。" +
+                    "2)根据短文出3道{LEVEL}水准的英文阅读理解单选题，命题要求：" +
                     "a.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
                     "b.干扰项要有迷惑性——可用原文出现过的词但表述错误、偷换概念、张冠李戴或过度推断，禁止一眼排除的选项；" +
                     "c.3题题型必须不同，从中选取：细节理解、推理判断(infer/imply/suggest)、主旨大意、词义猜测(the word \\\"X\\\" most likely means)、作者态度；" +
@@ -285,9 +305,12 @@ namespace ToastFish.Model.Ai
                     "\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}" +
                     "，answer是正确选项下标(0~3)。只输出纯JSON文本，禁止用markdown代码块包裹。";
 
-                // 生成轮：固定 system prompt + user 仅发单词表（命中上下文缓存）
+                // 生成轮：system prompt 按当前词库难度动态化 + user 仅发单词表（同词库内命中上下文缓存）
+                string level = GetBookLevel(bookName);
+                string sysPrompt = SYS_PROMPT.Replace("{LEVEL}", level);
+                string sysPromptReason = SYS_PROMPT_REASON.Replace("{LEVEL}", level);
                 bool reason = AiConfig.ModelMode == 1;
-                string body = BuildBody(reason ? SYS_PROMPT_REASON : SYS_PROMPT,
+                string body = BuildBody(reason ? sysPromptReason : sysPrompt,
                     string.Join(", ", words.ToArray()), reason, 1400);
 
                 // 局部函数：推理模式失败（思考过长截断/解析失败）→ 快速模式兜底重试。
@@ -295,11 +318,11 @@ namespace ToastFish.Model.Ai
                 bool TryFastFallback(out EssayResult fb)
                 {
                     fb = null;
-                    string fbBody = BuildBody(SYS_PROMPT, string.Join(", ", words.ToArray()), false, 1400);
+                    string fbBody = BuildBody(sysPrompt, string.Join(", ", words.ToArray()), false, 1400);
                     string fbContent, fbError;
                     if (!PostChat(fbBody, false, out fbContent, out fbError)) return false;
                     if (!ParseResult(fbContent, out fb, out fbError)) return false;
-                    ReviseEssay(words, ref fb);
+                    ReviseEssay(words, bookName, ref fb);
                     return true;
                 }
 
@@ -319,7 +342,7 @@ namespace ToastFish.Model.Ai
 
                 // 修正轮：仅快速模式（推理模式 pro 本身深度思考，保持单轮控延迟/成本）
                 if (!reason)
-                    ReviseEssay(words, ref result);
+                    ReviseEssay(words, bookName, ref result);
 
                 return true;
             }
@@ -344,7 +367,7 @@ namespace ToastFish.Model.Ai
         /// AI 写短文（含10个挖空标记）+ 15个候选词（10正+5干扰），
         /// 干扰词由 AI 设计保证语义/词形匹配，非本地随机抽取。
         /// </summary>
-        public static bool TryGenerateCloze(List<string> words, out ClozeResult result, out string error)
+        public static bool TryGenerateCloze(List<string> words, string bookName, out ClozeResult result, out string error)
         {
             result = null; error = null;
             LiveError = null;
@@ -367,7 +390,7 @@ namespace ToastFish.Model.Ai
                     "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出10个最值得挖的实词即可。" +
                     "" +
                     "要求：" +
-                    "1) 写一篇150~200词的英文短文（六级阅读难度，有逻辑有细节）。" +
+                    "1) 写一篇150~200词的英文短文（{LEVEL}阅读难度，有逻辑有细节）。" +
                     "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic）。" +
                     "把它们自然地融入，不要让它们显得突兀或堆砌。" +
                     "" +
@@ -411,7 +434,7 @@ namespace ToastFish.Model.Ai
                     "要求：" +
                     "1) 写一篇英文短文（不设字数限制，按内容需要充分展开）。" +
                     "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic）。" +
-                    "把它们自然地融入，不要让它们显得突兀或堆砌。短文有实质内容和思想深度，六级以上阅读水平，值得一读。" +
+                    "把它们自然地融入，不要让它们显得突兀或堆砌。短文有实质内容和思想深度，{LEVEL}以上阅读水平，值得一读。" +
                     "" +
                     "2) 从短文中选出**恰好10个实词**（名/动/形/副）挖空，用[1][2]...[10]依次标记。选词只看两点：" +
                     "a) 这个词在上下文中有推断空间——前后句的语义、逻辑连接、固定搭配能提供足够线索；" +
@@ -443,20 +466,23 @@ namespace ToastFish.Model.Ai
                     "candidates必须恰好15项。blank=1~10为正确答案，-1为干扰词。" +
                     "只输出纯JSON，**禁止用markdown代码块包裹**。";
 
-                // 生成轮：固定 system prompt + user 仅发单词表（命中上下文缓存）
+                // 生成轮：system prompt 按当前词库难度动态化 + user 仅发单词表（同词库内命中上下文缓存）
+                string level = GetBookLevel(bookName);
+                string clozePrompt = CLOZE_PROMPT.Replace("{LEVEL}", level);
+                string clozePromptReason = CLOZE_PROMPT_REASON.Replace("{LEVEL}", level);
                 bool reason = AiConfig.ModelMode == 1;
-                string body = BuildBody(reason ? CLOZE_PROMPT_REASON : CLOZE_PROMPT,
+                string body = BuildBody(reason ? clozePromptReason : clozePrompt,
                     string.Join(", ", words.ToArray()), reason, 2000);
 
                 // 局部函数：推理模式失败 → 快速模式兜底重试（thinking disabled 不会被思考挤占）。
                 bool TryFastFallback(out ClozeResult fb)
                 {
                     fb = null;
-                    string fbBody = BuildBody(CLOZE_PROMPT, string.Join(", ", words.ToArray()), false, 2000);
+                    string fbBody = BuildBody(clozePrompt, string.Join(", ", words.ToArray()), false, 2000);
                     string fbContent, fbError;
                     if (!PostChat(fbBody, false, out fbContent, out fbError)) return false;
                     if (!ParseClozeResult(fbContent, out fb, out fbError)) return false;
-                    ReviseCloze(words, ref fb);
+                    ReviseCloze(words, bookName, ref fb);
                     return true;
                 }
 
@@ -476,7 +502,7 @@ namespace ToastFish.Model.Ai
 
                 // 修正轮：仅快速模式（推理模式保持单轮）
                 if (!reason)
-                    ReviseCloze(words, ref result);
+                    ReviseCloze(words, bookName, ref result);
 
                 return true;
             }
@@ -563,12 +589,12 @@ namespace ToastFish.Model.Ai
         }
 
         /// <summary>Essay 修正轮：把当前结果序列化发给模型自检，模型满意回 {"ok":true} 则保持，否则接受修正版。失败一律回退上一版。</summary>
-        private static void ReviseEssay(List<string> words, ref EssayResult result)
+        private static void ReviseEssay(List<string> words, string bookName, ref EssayResult result)
         {
             for (int round = 0; round < MAX_REVISE_ROUNDS; round++)
             {
                 string user = string.Join(", ", words.ToArray()) + "\n\n当前短文与题目(JSON):\n" + SerializeEssay(result);
-                string body = BuildBody(REVISE_PROMPT, user, false, 1400);
+                string body = BuildBody(REVISE_PROMPT.Replace("{LEVEL}", GetBookLevel(bookName)), user, false, 1400);
                 string c, e;
                 if (!PostChat(body, false, out c, out e))
                     break;
@@ -584,12 +610,12 @@ namespace ToastFish.Model.Ai
         }
 
         /// <summary>CLOZE 修正轮：同上。</summary>
-        private static void ReviseCloze(List<string> words, ref ClozeResult result)
+        private static void ReviseCloze(List<string> words, string bookName, ref ClozeResult result)
         {
             for (int round = 0; round < MAX_REVISE_ROUNDS; round++)
             {
                 string user = string.Join(", ", words.ToArray()) + "\n\n当前短文与题目(JSON):\n" + SerializeCloze(result);
-                string body = BuildBody(REVISE_CLOZE_PROMPT, user, false, 2000);
+                string body = BuildBody(REVISE_CLOZE_PROMPT.Replace("{LEVEL}", GetBookLevel(bookName)), user, false, 2000);
                 string c, e;
                 if (!PostChat(body, false, out c, out e))
                     break;
