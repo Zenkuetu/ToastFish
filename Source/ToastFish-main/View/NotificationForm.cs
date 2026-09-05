@@ -2638,6 +2638,7 @@ namespace ToastFish.View
                     Height = formH,
                     Left = wa.Right - formW - 20,
                     Top = wa.Bottom - formH - 20,
+                    StartPosition = FormStartPosition.Manual,
                     FormBorderStyle = FormBorderStyle.None,
                     ShowInTaskbar = false,
                     TopMost = true,
