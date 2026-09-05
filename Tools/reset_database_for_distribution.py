@@ -65,6 +65,27 @@ def reset_database(db_path):
         """)
         print(f"  {table}: {learned}/{total} 已学 → 已重置")
 
+    # ============ KaoYan_3（精简结构：无 question/choiceIndex 等复盘题列，单独清洗） ============
+    kt = 'KaoYan_3'
+    kt_exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (kt,)
+    ).fetchone()
+    if kt_exists:
+        kt_learned = conn.execute(f"SELECT COUNT(*) FROM [{kt}] WHERE status != 0").fetchone()[0]
+        kt_total = conn.execute(f"SELECT COUNT(*) FROM [{kt}]").fetchone()[0]
+        conn.execute(f"""
+            UPDATE [{kt}] SET
+                status = 0,
+                difficulty = 0.3,
+                daysBetweenReviews = 3,
+                lastScore = 0,
+                dateLastReviewed = NULL,
+                dateLastReviewed_bak = NULL
+        """)
+        print(f"  {kt}: {kt_learned}/{kt_total} 已学 → 已重置")
+    else:
+        print(f"  跳过: {kt} (不存在)")
+
     # ============ 日语词表 StdJp_Mid ============
     learned = conn.execute("SELECT COUNT(*) FROM StdJp_Mid WHERE status != 0").fetchone()[0]
     total = conn.execute("SELECT COUNT(*) FROM StdJp_Mid").fetchone()[0]
