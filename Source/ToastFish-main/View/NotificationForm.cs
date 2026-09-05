@@ -2619,22 +2619,25 @@ namespace ToastFish.View
                         : "已填: " + filledCount + " / " + blankCount;
                 }
 
-                // 布局常量
+                // 布局常量（提前计算提示文本高度，避免 form 构造时引用未赋值的变量）
+                blankHintH = MeasureH("空位（点击选中，再在下方选项中选择）：", fontSmall, passageW) + 2;
+                optHintH = MeasureH("选项（A/B/C/D，点击即填入上方选中的空位）：", fontSmall, passageW) + 2;
                 int titleH = MeasureH("20空四选一 完形填空", fontTitle, passageW) + 6;
                 int blankBarH = 64;   // 20 个空位按钮（约 2 行）
                 int optBarH = 44;     // 4 个选项按钮（1 行）
                 int statusH = 26;
                 int submitBtnH = 40;
-                int passageMaxH = (int)(wa.Height * 0.45);
-                int passageH = Math.Min(160, passageMaxH);
+                int passageH = (int)(wa.Height * 0.42);   // 短文区占 42% 屏高（300 词短文足够，超限出滚动条）
+                int formH = pad + titleH + passageH + 6 + blankHintH + 1 + blankBarH + 6 + optHintH + 1 + optBarH + 4 + statusH + 6 + submitBtnH + pad;
+                formH = Math.Min(formH, CapH());
 
                 int y = pad;
                 var form = new Form
                 {
                     Width = formW,
-                    Height = pad + titleH + passageH + 6 + blankHintH + 1 + blankBarH + 6 + optHintH + 1 + optBarH + 4 + statusH + 6 + submitBtnH + pad,
+                    Height = formH,
                     Left = wa.Right - formW - 20,
-                    Top = wa.Bottom - (pad + titleH + passageH + 6 + 64 + 1 + 44 + 6 + 24 + 1 + 44 + 4 + statusH + 6 + submitBtnH + pad) - 20,
+                    Top = wa.Bottom - formH - 20,
                     FormBorderStyle = FormBorderStyle.None,
                     ShowInTaskbar = false,
                     TopMost = true,
@@ -2675,7 +2678,6 @@ namespace ToastFish.View
 
                 // 3. 空位导航条（20 个按钮）
                 string blankHint = "空位（点击选中，再在下方选项中选择）：";
-                blankHintH = MeasureH(blankHint, fontSmall, passageW) + 2;
                 blankLabel = new Label
                 {
                     Text = blankHint,
@@ -2730,7 +2732,6 @@ namespace ToastFish.View
 
                 // 4. 选项区（4 个选项按钮，随选中空位变化）
                 string optHint = "选项（A/B/C/D，点击即填入上方选中的空位）：";
-                optHintH = MeasureH(optHint, fontSmall, passageW) + 2;
                 optLabel = new Label
                 {
                     Text = optHint,
