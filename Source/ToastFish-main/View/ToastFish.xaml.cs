@@ -35,7 +35,7 @@ namespace ToastFish
         {"CET4_1", "四级核心词汇"},{"CET4_3", "四级完整词汇"},{"CET6_1", "六级核心词汇"},
         {"CET6_3", "六级完整词汇"},{"GMAT_3", "GMAT词汇"},{"GRE_2", "GRE词汇"},
         {"IELTS_3", "IELTS词汇"},{"TOEFL_2", "TOEFL词汇"},{"SAT_2", "SAT词汇"},
-        {"KaoYan_1", "考研必考词汇"},{"KaoYan_2", "考研完整词汇"},{"Level4_1", "专四真题高频词"},
+        {"KaoYan_1", "考研必考词汇"},{"KaoYan_2", "考研完整词汇"},{"KaoYan_3", "考研词频词汇"},{"Level4_1", "专四真题高频词"},
         {"Level4luan_2", "专四核心词汇"},{"Level8_1", "专八真题高频词"},{"Level8luan_2", "专八核心词汇"},
         {"Goin", "顺序五十音"},{"StdJp_Mid", "标准日本语中级词汇"} };
        // private NotifyIcon _notifyIcon = null;
@@ -270,6 +270,8 @@ namespace ToastFish
             KaoYan_1.Click += new EventHandler(SelectBook_Click);
             ToolStripItem KaoYan_2 = new ToolStripMenuItem("考研完整词汇");
             KaoYan_2.Click += new EventHandler(SelectBook_Click);
+            ToolStripItem KaoYan_3 = new ToolStripMenuItem("考研词频词汇");
+            KaoYan_3.Click += new EventHandler(SelectBook_Click);
             ToolStripItem Level4_1 = new ToolStripMenuItem("专四真题高频词");
             Level4_1.Click += new EventHandler(SelectBook_Click);
             ToolStripItem Level4luan_2 = new ToolStripMenuItem("专四核心词汇");
@@ -327,6 +329,8 @@ namespace ToastFish
                 KaoYan_1.PerformClick();
             else if (Select.TABLE_NAME == "KaoYan_2")
                 KaoYan_2.PerformClick();
+            else if (Select.TABLE_NAME == "KaoYan_3")
+                KaoYan_3.PerformClick();
             else if (Select.TABLE_NAME == "Level4_1")
                 Level4_1.PerformClick();
             else if (Select.TABLE_NAME == "Level4luan_2")
@@ -362,6 +366,7 @@ namespace ToastFish
             ((ToolStripDropDownItem)Cms.Items[2]).DropDownItems.Add(SAT_2);
             ((ToolStripDropDownItem)Cms.Items[2]).DropDownItems.Add(KaoYan_1);
             ((ToolStripDropDownItem)Cms.Items[2]).DropDownItems.Add(KaoYan_2);
+            ((ToolStripDropDownItem)Cms.Items[2]).DropDownItems.Add(KaoYan_3);
             ((ToolStripDropDownItem)Cms.Items[2]).DropDownItems.Add(Level4_1);
             ((ToolStripDropDownItem)Cms.Items[2]).DropDownItems.Add(Level4luan_2);
             ((ToolStripDropDownItem)Cms.Items[2]).DropDownItems.Add(Level8_1);
@@ -585,6 +590,8 @@ namespace ToastFish
                 TempName = "KaoYan_1";
             else if (sender.ToString() == "考研完整词汇")
                 TempName = "KaoYan_2";
+            else if (sender.ToString() == "考研词频词汇")
+                TempName = "KaoYan_3";
             else if (sender.ToString() == "专四真题高频词")
                 TempName = "Level4_1";
             else if (sender.ToString() == "专四核心词汇")

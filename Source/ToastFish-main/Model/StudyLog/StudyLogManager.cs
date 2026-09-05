@@ -30,7 +30,7 @@ namespace ToastFish.Model.StudyLog
         private static readonly string[] EnglishTables = {
             "CET4_1","CET4_3","CET6_1","CET6_2","CET6_3",
             "Level4_1","Level4luan_2","Level8_1","Level8luan_2",
-            "KaoYan_1","KaoYan_2","IELTS_3","TOEFL_2",
+            "KaoYan_1","KaoYan_2","KaoYan_3","IELTS_3","TOEFL_2",
             "GRE_2","GMAT_3","SAT_2"
         };
 
