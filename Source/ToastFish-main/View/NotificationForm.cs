@@ -1199,7 +1199,6 @@ namespace ToastFish.View
                 var fontTitle = new Font("Microsoft YaHei UI", 11, FontStyle.Bold);
                 var fontSent  = new Font("Microsoft YaHei UI", 10.5f, FontStyle.Regular);
                 var fontSentB = new Font("Microsoft YaHei UI", 10.5f, FontStyle.Bold);
-                var fontCN    = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Regular);
                 var fontQuiz  = new Font("Microsoft YaHei UI", 10, FontStyle.Regular);
                 var fontQuizB = new Font("Microsoft YaHei UI", 10, FontStyle.Bold);
                 var fontSmall = new Font("Microsoft YaHei UI", 9, FontStyle.Regular);
@@ -1284,7 +1283,6 @@ namespace ToastFish.View
 
                 // === 测验状态 ===
                 int quizIdx = -1, correctCnt = 0, attemptedCnt = 0;
-                bool cnRevealed = false;
 
                 // ---- 阅读阶段按钮 ----
                 int btnH = 40;
@@ -1299,27 +1297,12 @@ namespace ToastFish.View
                 btnQuiz.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
                 bottomPanel.Controls.Add(btnQuiz);
 
-                Button btnCn = null;
-                if (!string.IsNullOrEmpty(essayCN))
-                {
-                    int cnW = TextRenderer.MeasureText("显示翻译", FONT_BTN).Width + 36;
-                    btnCn = new Button
-                    {
-                        Text = "显示翻译", Size = new Size(cnW, btnH),
-                        BackColor = Color.FromArgb(51, 51, 51), ForeColor = Color.White,
-                        FlatStyle = FlatStyle.Flat, Font = FONT_BTN
-                    };
-                    btnCn.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
-                    bottomPanel.Controls.Add(btnCn);
-                }
-
-                // 布局阅读阶段按钮
+                // 布局阅读阶段按钮（「显示翻译」已移除，翻译见仪表盘 AI 短文历史页）
                 Action layoutReadingBtns = () =>
                 {
-                    int tw = btnQuiz.Width + ((btnCn != null && !cnRevealed) ? btnCn.Width + 10 : 0);
+                    int tw = btnQuiz.Width;
                     int x = (bottomPanel.ClientSize.Width - tw) / 2;
                     int by = (bottomPanel.ClientSize.Height - btnH) / 2;
-                    if (btnCn != null && !cnRevealed) { btnCn.Location = new Point(x, by); x += btnCn.Width + 10; }
                     btnQuiz.Location = new Point(x, by);
                 };
                 layoutReadingBtns();
@@ -1347,23 +1330,6 @@ namespace ToastFish.View
                     bottomPanel.Top = rtb.Bottom + 8;
                     layoutReadingBtns();
                 };
-
-                if (btnCn != null)
-                {
-                    btnCn.Click += (s, e) =>
-                    {
-                        cnRevealed = true; btnCn.Visible = false;
-                        rtb.SelectionStart = rtb.TextLength;
-                        rtb.SelectionFont = fontCN;
-                        rtb.SelectionColor = Color.FromArgb(130, 130, 130);
-                        rtb.AppendText("\n\n" + essayCN);
-                        rtb.SelectionStart = 0; rtb.SelectionLength = 0;
-                        layoutReadingBtns();
-
-                        // 翻译追加后重排窗口高度（75% 上界 + 滚动条按需开启）
-                        ArrangeReadingStage();
-                    };
-                }
 
                 // ====== 测验内嵌逻辑 ======
                 bool hasQuiz = (questions != null && questions.Count > 0);
@@ -2433,6 +2399,461 @@ namespace ToastFish.View
                         int corr = 0;
                         int att = filledCount;
                         for (int b = 0; b < 10; b++)
+                            if (filledWords[b] != null && filledWords[b] == correctWords[b]) corr++;
+                        if (_current == form) _current = null;
+                        _isHidden = false;
+                        form.Close(); form.Dispose();
+                        callback((att << 16) | corr);
+                    };
+                    clTimer.Start();
+                    form.Tag = new PopupState { Timer = clTimer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
+                }
+
+                // 9. 清理
+                form.FormClosed += (s2, e2) =>
+                {
+                    clTimer?.Dispose();
+                    if (_current == form) _current = null;
+                    _isHidden = false;
+                    form.Dispose();
+                };
+
+                _isHidden = false;
+                _current = form;
+                form.Show();
+            }));
+        }
+
+        /// <summary>
+        /// 考研英语 20空四选一 完形填空弹窗（2026-09-05）。
+        /// 交互：点空位 → 底部显示该空的 4 个选项 → 点选项填入；全部填完（≥minToSubmit）提交计分。
+        /// callback((attempted&lt;&lt;16) | correct)：attempted=已填数，correct=答对数。
+        /// </summary>
+        public static void ShowCloze4ChoicePopup(Cloze4Result cloze, List<string> highlightWords,
+            Action<int> callback, int timeoutMs = TIMEOUT_READING)
+        {
+            var dispatcher = Model.PushControl.PushWords.UIDispatcher;
+            if (dispatcher == null) { callback(0); return; }
+
+            dispatcher.BeginInvoke(new Action(() =>
+            {
+                var wa = Screen.PrimaryScreen.WorkingArea;
+                int pad = 10;
+                int cw = Math.Min(680, wa.Width - 40);
+                int formW = cw;
+                int passageW = cw - 2 * pad;
+
+                var fontPassage = new Font("Microsoft YaHei UI", 12, FontStyle.Regular);
+                var fontPassageB = new Font("Microsoft YaHei UI", 12, FontStyle.Bold);
+                var fontWord = new Font("Microsoft YaHei UI", 10, FontStyle.Regular);
+                var fontSmall = new Font("Microsoft YaHei UI", 9, FontStyle.Regular);
+                var fontTitle = new Font("Microsoft YaHei UI", 13, FontStyle.Bold);
+                var fontCN = new Font("Microsoft YaHei UI", 10, FontStyle.Regular);
+
+                int blankCount = cloze.Questions.Count; // 实际有效空位数（≥15）
+                int minToSubmit = Math.Max(blankCount - 5, 12);
+
+                // === 提前声明闭包变量 ===
+                RichTextBox rtb = null;
+                Button submitBtn = null;
+                Label subtitleLbl = null;
+                Label blankLabel = null; Label optLabel = null;
+                FlowLayoutPanel blankPanel = null; FlowLayoutPanel optPanel = null;
+                int blankHintH = 0; int optHintH = 0;
+                System.Windows.Forms.Timer clTimer = null;
+                Button[] blankBtns = new Button[20];
+                Button[] optBtns = new Button[4];
+                string[] filledWords = new string[20];
+                string[] correctWords = new string[20];
+                var blank2opt = new Dictionary<int, string[]>();   // 空位下标(0~19) → 4 选项
+                int filledCount = 0;
+                int selBlank = -1;
+                bool submitted = false;
+
+                // 从 questions 提取 correctWords + 选项（blank 1~20 → 下标 0~19）
+                foreach (var q in cloze.Questions)
+                {
+                    int bi = q.Blank - 1;
+                    if (bi < 0 || bi >= 20) continue;
+                    if (q.Answer >= 0 && q.Answer < q.Options.Count)
+                        correctWords[bi] = q.Options[q.Answer];
+                    blank2opt[bi] = q.Options.ToArray();
+                }
+
+                // 构造段落文本：把 [N] 替换为可视化空位
+                string BuildPassage()
+                {
+                    string t = cloze.Text;
+                    for (int i = 20; i >= 1; i--)
+                    {
+                        string marker = "[" + i + "]";
+                        string repl;
+                        if (filledWords[i - 1] != null)
+                            repl = " ▶" + filledWords[i - 1] + "◀ ";
+                        else if (selBlank == i - 1)
+                            repl = " ┌_" + i + "_┐ ";
+                        else
+                            repl = " ___" + i + "___ ";
+                        int idx = t.IndexOf(marker);
+                        if (idx >= 0)
+                            t = t.Substring(0, idx) + repl + t.Substring(idx + marker.Length);
+                    }
+                    return t;
+                }
+
+                void RenderPassage()
+                {
+                    rtb.SuspendLayout();
+                    string fullText = BuildPassage();
+                    rtb.Text = fullText;
+                    rtb.SelectAll();
+                    rtb.SelectionFont = fontPassage;
+                    rtb.SelectionColor = Color.FromArgb(210, 210, 210);
+                    for (int i = 0; i < 20; i++)
+                    {
+                        string search;
+                        Color clr;
+                        if (filledWords[i] != null)
+                        { search = "▶" + filledWords[i] + "◀"; clr = Color.FromArgb(0, 255, 136); }
+                        else if (selBlank == i)
+                        { search = "┌_" + (i + 1) + "_┐"; clr = Color.FromArgb(255, 200, 100); }
+                        else
+                        { search = "___" + (i + 1) + "___"; clr = Color.FromArgb(255, 180, 60); }
+                        int pos = rtb.Text.IndexOf(search);
+                        if (pos >= 0)
+                        {
+                            rtb.Select(pos, search.Length);
+                            rtb.SelectionFont = fontPassageB;
+                            rtb.SelectionColor = clr;
+                        }
+                    }
+                    rtb.Select(0, 0);
+                    rtb.ResumeLayout();
+                }
+
+                void RefreshBlankBtns()
+                {
+                    for (int b = 0; b < 20; b++)
+                    {
+                        bool hasBlank = blank2opt.ContainsKey(b);
+                        blankBtns[b].Visible = hasBlank;
+                        if (!hasBlank) continue;
+                        if (filledWords[b] != null)
+                        {
+                            blankBtns[b].Text = (b + 1) + ". " + filledWords[b];
+                            blankBtns[b].BackColor = submitted
+                                ? (filledWords[b] == correctWords[b] ? Color.FromArgb(0, 90, 50) : Color.FromArgb(90, 20, 40))
+                                : Color.FromArgb(0, 70, 50);
+                            blankBtns[b].ForeColor = submitted
+                                ? (filledWords[b] == correctWords[b] ? Color.FromArgb(0, 255, 136) : Color.FromArgb(255, 80, 110))
+                                : Color.FromArgb(0, 255, 136);
+                        }
+                        else
+                        {
+                            blankBtns[b].Text = (b + 1).ToString();
+                            if (selBlank == b && !submitted)
+                            {
+                                blankBtns[b].BackColor = Color.FromArgb(80, 60, 20);
+                                blankBtns[b].ForeColor = Color.FromArgb(255, 200, 100);
+                            }
+                            else
+                            {
+                                blankBtns[b].BackColor = Color.FromArgb(44, 44, 60);
+                                blankBtns[b].ForeColor = Color.FromArgb(180, 180, 180);
+                            }
+                        }
+                    }
+                }
+
+                // 刷新选项区：显示当前选中空位的 4 个选项
+                void RefreshOptions()
+                {
+                    string[] opts = (selBlank >= 0 && blank2opt.ContainsKey(selBlank)) ? blank2opt[selBlank] : null;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        if (opts != null && i < opts.Length)
+                        {
+                            optBtns[i].Text = ((char)('A' + i)) + ". " + opts[i];
+                            optBtns[i].Visible = true;
+                            optBtns[i].Enabled = !submitted;
+                        }
+                        else
+                        {
+                            optBtns[i].Visible = false;
+                        }
+                    }
+                }
+
+                void RefreshSubmitBtn()
+                {
+                    if (submitted)
+                    {
+                        int corr = 0;
+                        for (int b = 0; b < 20; b++)
+                            if (filledWords[b] != null && filledWords[b] == correctWords[b]) corr++;
+                        submitBtn.Text = "关闭（答对 " + corr + " / " + blankCount + "）";
+                        submitBtn.BackColor = Color.FromArgb(70, 90, 60);
+                        submitBtn.ForeColor = Color.FromArgb(220, 255, 220);
+                        submitBtn.Enabled = true;
+                    }
+                    else if (filledCount >= minToSubmit)
+                    {
+                        submitBtn.Text = "✓ 提交答案（已填 " + filledCount + " / 需≥" + minToSubmit + "）";
+                        submitBtn.BackColor = Color.FromArgb(80, 60, 30);
+                        submitBtn.ForeColor = Color.FromArgb(255, 220, 140);
+                        submitBtn.Enabled = true;
+                    }
+                    else
+                    {
+                        submitBtn.Text = "提交答案（已填 " + filledCount + " / 需≥" + minToSubmit + "）";
+                        submitBtn.BackColor = Color.FromArgb(60, 60, 60);
+                        submitBtn.ForeColor = Color.FromArgb(140, 140, 140);
+                        submitBtn.Enabled = false;
+                    }
+                }
+
+                void UpdateSubtitle()
+                {
+                    subtitleLbl.Text = submitted
+                        ? "已完成 — 绿色=答对，红色=答错"
+                        : "已填: " + filledCount + " / " + blankCount;
+                }
+
+                // 布局常量
+                int titleH = MeasureH("20空四选一 完形填空", fontTitle, passageW) + 6;
+                int blankBarH = 64;   // 20 个空位按钮（约 2 行）
+                int optBarH = 44;     // 4 个选项按钮（1 行）
+                int statusH = 26;
+                int submitBtnH = 40;
+                int passageMaxH = (int)(wa.Height * 0.45);
+                int passageH = Math.Min(160, passageMaxH);
+
+                int y = pad;
+                var form = new Form
+                {
+                    Width = formW,
+                    Height = pad + titleH + passageH + 6 + blankHintH + 1 + blankBarH + 6 + optHintH + 1 + optBarH + 4 + statusH + 6 + submitBtnH + pad,
+                    Left = wa.Right - formW - 20,
+                    Top = wa.Bottom - (pad + titleH + passageH + 6 + 64 + 1 + 44 + 6 + 24 + 1 + 44 + 4 + statusH + 6 + submitBtnH + pad) - 20,
+                    FormBorderStyle = FormBorderStyle.None,
+                    ShowInTaskbar = false,
+                    TopMost = true,
+                    BackColor = Color.FromArgb(32, 32, 48),
+                    ForeColor = Color.FromArgb(230, 230, 230)
+                };
+
+                // 1. 标题
+                form.Controls.Add(new Label
+                {
+                    Text = "20空四选一 完形填空  —  点击空位，从 A/B/C/D 中选择",
+                    Font = fontTitle,
+                    ForeColor = Color.FromArgb(255, 200, 100),
+                    AutoSize = true,
+                    Location = new Point(pad, y)
+                });
+                y += titleH;
+
+                // 2. 短文 RichTextBox
+                rtb = new RichTextBox
+                {
+                    Location = new Point(pad, y),
+                    Size = new Size(passageW, passageH),
+                    Font = fontPassage,
+                    ReadOnly = true,
+                    BorderStyle = BorderStyle.None,
+                    BackColor = Color.FromArgb(31, 31, 40),
+                    ForeColor = Color.FromArgb(210, 210, 210),
+                    ScrollBars = RichTextBoxScrollBars.Vertical,
+                    TabStop = false,
+                    DetectUrls = false,
+                    WordWrap = true
+                };
+                rtb.RightMargin = passageW - 24;
+                form.Controls.Add(rtb);
+                AttachWordLookup(rtb);
+                y += passageH + 6;
+
+                // 3. 空位导航条（20 个按钮）
+                string blankHint = "空位（点击选中，再在下方选项中选择）：";
+                blankHintH = MeasureH(blankHint, fontSmall, passageW) + 2;
+                blankLabel = new Label
+                {
+                    Text = blankHint,
+                    Font = fontSmall,
+                    ForeColor = Color.FromArgb(160, 160, 160),
+                    AutoSize = false,
+                    Size = new Size(passageW, blankHintH),
+                    Location = new Point(pad, y)
+                };
+                form.Controls.Add(blankLabel);
+                y += blankHintH + 1;
+
+                blankPanel = new FlowLayoutPanel
+                {
+                    Location = new Point(pad, y),
+                    Size = new Size(passageW, blankBarH),
+                    BackColor = Color.FromArgb(28, 28, 42),
+                    FlowDirection = FlowDirection.LeftToRight,
+                    WrapContents = true,
+                    AutoScroll = true
+                };
+                for (int b = 0; b < 20; b++)
+                {
+                    int bi = b;
+                    var btn = new Button
+                    {
+                        Text = (b + 1).ToString(),
+                        Size = new Size(60, 26),
+                        BackColor = Color.FromArgb(44, 44, 60),
+                        ForeColor = Color.FromArgb(180, 180, 180),
+                        FlatStyle = FlatStyle.Flat,
+                        Font = fontSmall,
+                        Margin = new Padding(2)
+                    };
+                    btn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 100);
+                    btn.Click += (s2, e2) =>
+                    {
+                        if (submitted) return;
+                        if (!blank2opt.ContainsKey(bi)) return;
+                        // 选中/切换此空位
+                        selBlank = (selBlank == bi) ? -1 : bi;
+                        RenderPassage();
+                        RefreshBlankBtns();
+                        RefreshOptions();
+                        UpdateSubtitle();
+                    };
+                    blankPanel.Controls.Add(btn);
+                    blankBtns[b] = btn;
+                }
+                form.Controls.Add(blankPanel);
+                y += blankBarH + 6;
+
+                // 4. 选项区（4 个选项按钮，随选中空位变化）
+                string optHint = "选项（A/B/C/D，点击即填入上方选中的空位）：";
+                optHintH = MeasureH(optHint, fontSmall, passageW) + 2;
+                optLabel = new Label
+                {
+                    Text = optHint,
+                    Font = fontSmall,
+                    ForeColor = Color.FromArgb(160, 160, 160),
+                    AutoSize = false,
+                    Size = new Size(passageW, optHintH),
+                    Location = new Point(pad, y)
+                };
+                form.Controls.Add(optLabel);
+                y += optHintH + 1;
+
+                optPanel = new FlowLayoutPanel
+                {
+                    Location = new Point(pad, y),
+                    Size = new Size(passageW, optBarH),
+                    BackColor = Color.FromArgb(28, 28, 42),
+                    FlowDirection = FlowDirection.LeftToRight,
+                    WrapContents = false
+                };
+                for (int i = 0; i < 4; i++)
+                {
+                    int oi = i;
+                    var btn = new Button
+                    {
+                        Text = "",
+                        Size = new Size((passageW - 20) / 4, 36),
+                        BackColor = Color.FromArgb(44, 44, 64),
+                        ForeColor = Color.FromArgb(200, 220, 255),
+                        FlatStyle = FlatStyle.Flat,
+                        Font = fontWord,
+                        Margin = new Padding(2),
+                        Visible = false
+                    };
+                    btn.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 120);
+                    btn.Click += (s2, e2) =>
+                    {
+                        if (submitted) return;
+                        if (selBlank < 0 || !blank2opt.ContainsKey(selBlank)) return;
+                        string[] opts = blank2opt[selBlank];
+                        if (oi >= opts.Length) return;
+                        if (filledWords[selBlank] == null) filledCount++;
+                        filledWords[selBlank] = opts[oi];
+                        selBlank = -1;
+                        RenderPassage();
+                        RefreshBlankBtns();
+                        RefreshOptions();
+                        RefreshSubmitBtn();
+                        UpdateSubtitle();
+                    };
+                    optPanel.Controls.Add(btn);
+                    optBtns[i] = btn;
+                }
+                form.Controls.Add(optPanel);
+                y += optBarH + 4;
+
+                // 5. 状态栏
+                subtitleLbl = new Label
+                {
+                    Text = "已填: 0/" + blankCount,
+                    Font = new Font("Microsoft YaHei UI", 10, FontStyle.Bold),
+                    ForeColor = Color.FromArgb(200, 180, 120),
+                    AutoSize = true,
+                    Location = new Point(pad, y)
+                };
+                form.Controls.Add(subtitleLbl);
+
+                // 6. 提交按钮
+                submitBtn = new Button
+                {
+                    Text = "提交答案（已填 0 / 需≥" + minToSubmit + "）",
+                    Size = new Size(passageW, submitBtnH),
+                    Location = new Point(pad, y + statusH + 6),
+                    BackColor = Color.FromArgb(60, 60, 60),
+                    ForeColor = Color.FromArgb(140, 140, 140),
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Microsoft YaHei UI", 10, FontStyle.Bold),
+                    Enabled = false
+                };
+                submitBtn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 100);
+                submitBtn.Click += (s2, e2) =>
+                {
+                    if (submitted)
+                    {
+                        int corr = 0;
+                        for (int b = 0; b < 20; b++)
+                            if (filledWords[b] != null && filledWords[b] == correctWords[b]) corr++;
+                        clTimer?.Stop(); clTimer?.Dispose();
+                        if (_current == form) _current = null;
+                        _isHidden = false;
+                        form.Close(); form.Dispose();
+                        callback((filledCount << 16) | corr);
+                    }
+                    else if (filledCount >= minToSubmit)
+                    {
+                        submitted = true;
+                        selBlank = -1;
+                        RefreshOptions();
+                        RenderPassage();
+                        RefreshBlankBtns();
+                        RefreshSubmitBtn();
+                        UpdateSubtitle();
+                    }
+                };
+                form.Controls.Add(submitBtn);
+
+                // 7. 初始渲染
+                form.CreateControl();
+                RenderPassage();
+                RefreshBlankBtns();
+                RefreshOptions();
+                RefreshSubmitBtn();
+
+                // 8. 超时
+                if (timeoutMs > 0)
+                {
+                    clTimer = new System.Windows.Forms.Timer { Interval = timeoutMs };
+                    clTimer.Tick += (s2, e2) =>
+                    {
+                        clTimer.Stop();
+                        int corr = 0;
+                        int att = filledCount;
+                        for (int b = 0; b < 20; b++)
                             if (filledWords[b] != null && filledWords[b] == correctWords[b]) corr++;
                         if (_current == form) _current = null;
                         _isHidden = false;

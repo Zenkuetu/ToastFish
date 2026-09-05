@@ -69,6 +69,11 @@ namespace ToastFish.Model.PushControl
         private static Task _clozePreFetchTask = null;
         private static List<Word> _clozePreFetchWords = null;
         private static string _clozePreFetchError = null;
+        // === 20空四选一 完形填空预生成（考研英语，2026-09-05） ===
+        private static Model.Ai.Cloze4Result _cloze4PreFetchResult = null;
+        private static Task _cloze4PreFetchTask = null;
+        private static List<Word> _cloze4PreFetchWords = null;
+        private static string _cloze4PreFetchError = null;
         /// <summary>预生成时决定题型，PushMiniReading 据此取用对应结果。</summary>
         private static bool _preFetchIsCloze = false;
 
@@ -177,6 +182,34 @@ namespace ToastFish.Model.PushControl
                     attempted, correct, modelMode);
             }
             catch (Exception ex) { Debug.WriteLine("SaveClozeLog: " + ex.Message); }
+        }
+
+        /// <summary>持久化 20空四选一 完形填空到 EssayLog 表（考研英语，2026-09-05）。</summary>
+        private static void SaveCloze4Log(List<Word> cloze4Words, Model.Ai.Cloze4Result cloze4,
+            int attempted, int correct)
+        {
+            if (TestMode) return; // 测试模式不走独立连接写入
+            try
+            {
+                var jss = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var wordsArr = cloze4Words.Select(w => w.headWord).ToList();
+                string wordsJson = jss.Serialize(wordsArr);
+                string createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                int modelMode = Model.Ai.AiConfig.ModelMode;
+
+                var questionsData = cloze4.Questions.Select(q => new {
+                    blank = q.Blank,
+                    options = q.Options,
+                    answer = q.Answer
+                }).ToList();
+                var cloze4Data = new { type = "cloze4", questions = questionsData };
+                string questionsJson = jss.Serialize(cloze4Data);
+
+                Select.InsertEssayLog(createdAt, Select.TABLE_NAME, wordsArr.Count,
+                    wordsJson, cloze4.Text, cloze4.TextCN ?? "", questionsJson,
+                    attempted, correct, modelMode);
+            }
+            catch (Exception ex) { Debug.WriteLine("SaveCloze4Log: " + ex.Message); }
         }
 
         /// <summary>
@@ -553,31 +586,65 @@ namespace ToastFish.Model.PushControl
 
                     if (doClozePrefetch)
                     {
-                        var clozeTask = new Task(() =>
+                        bool kaoyan = Select.TABLE_NAME.StartsWith("KaoYan");
+                        if (kaoyan)
                         {
-                            try
+                            // 考研：20空四选一（考研英语一完形填空真实题型）
+                            var cloze4Task = new Task(() =>
                             {
-                                Model.Ai.ClozeResult cr; string cerr;
-                                bool ok = Model.Ai.EssayGenerator.TryGenerateCloze(hws, Select.TABLE_NAME, out cr, out cerr);
-                                lock (_essayPreFetchLock)
+                                try
                                 {
-                                    _clozePreFetchResult = ok ? cr : null;
-                                    _clozePreFetchWords = ok ? captureWords : null;
-                                    if (!ok) _clozePreFetchError = cerr;
+                                    Model.Ai.Cloze4Result cr; string cerr;
+                                    bool ok = Model.Ai.EssayGenerator.TryGenerateCloze4Choice(hws, out cr, out cerr);
+                                    lock (_essayPreFetchLock)
+                                    {
+                                        _cloze4PreFetchResult = ok ? cr : null;
+                                        _cloze4PreFetchWords = ok ? captureWords : null;
+                                        if (!ok) _cloze4PreFetchError = cerr;
+                                    }
                                 }
-                            }
-                            catch (Exception ex)
+                                catch (Exception ex)
+                                {
+                                    Debug.WriteLine("AI 20空四选一预生成异常: " + ex.Message);
+                                    lock (_essayPreFetchLock)
+                                    {
+                                        _cloze4PreFetchResult = null; _cloze4PreFetchWords = null;
+                                        _cloze4PreFetchError = ex.Message;
+                                    }
+                                }
+                            });
+                            lock (_essayPreFetchLock) { _cloze4PreFetchTask = cloze4Task; }
+                            cloze4Task.Start();
+                        }
+                        else
+                        {
+                            // 非考研：15选10
+                            var clozeTask = new Task(() =>
                             {
-                                Debug.WriteLine("AI 完形填空预生成异常: " + ex.Message);
-                                lock (_essayPreFetchLock)
+                                try
                                 {
-                                    _clozePreFetchResult = null; _clozePreFetchWords = null;
-                                    _clozePreFetchError = ex.Message;
+                                    Model.Ai.ClozeResult cr; string cerr;
+                                    bool ok = Model.Ai.EssayGenerator.TryGenerateCloze(hws, Select.TABLE_NAME, out cr, out cerr);
+                                    lock (_essayPreFetchLock)
+                                    {
+                                        _clozePreFetchResult = ok ? cr : null;
+                                        _clozePreFetchWords = ok ? captureWords : null;
+                                        if (!ok) _clozePreFetchError = cerr;
+                                    }
                                 }
-                            }
-                        });
-                        lock (_essayPreFetchLock) { _clozePreFetchTask = clozeTask; }
-                        clozeTask.Start();
+                                catch (Exception ex)
+                                {
+                                    Debug.WriteLine("AI 完形填空预生成异常: " + ex.Message);
+                                    lock (_essayPreFetchLock)
+                                    {
+                                        _clozePreFetchResult = null; _clozePreFetchWords = null;
+                                        _clozePreFetchError = ex.Message;
+                                    }
+                                }
+                            });
+                            lock (_essayPreFetchLock) { _clozePreFetchTask = clozeTask; }
+                            clozeTask.Start();
+                        }
                     }
                     else
                     {
@@ -1279,7 +1346,126 @@ namespace ToastFish.Model.PushControl
 
                 if (useCloze)
                 {
-                    // === 15选10 完形填空 ===
+                    bool _kaoyan = Select.TABLE_NAME.StartsWith("KaoYan");
+                    if (_kaoyan)
+                    {
+                        // === 20空四选一 完形填空（考研英语一真实题型）===
+                        Model.Ai.Cloze4Result cloze4 = null;
+                        List<Word> cloze4Words = null;
+                        Task cloze4Task = null;
+                        lock (_essayPreFetchLock)
+                        {
+                            cloze4Task = _cloze4PreFetchTask;
+                            _cloze4PreFetchTask = null;
+                            if (cloze4Task == null)
+                            {
+                                cloze4 = _cloze4PreFetchResult;
+                                cloze4Words = _cloze4PreFetchWords;
+                                _cloze4PreFetchResult = null;
+                                _cloze4PreFetchWords = null;
+                            }
+                        }
+                        // Wait OUTSIDE lock
+                        if (cloze4Task != null)
+                        {
+                            if (!cloze4Task.IsCompleted)
+                            {
+                                PushMessage("AI 正在生成 20空四选一 完形填空...");
+                                int elapsed = 0;
+                                bool asked = false;
+                                const int ABORT_TIMEOUT_MS = 180000;
+                                while (!cloze4Task.IsCompleted)
+                                {
+                                    if (cloze4Task.Wait(5000)) break;
+                                    elapsed += 5000;
+                                    string t = Model.Ai.EssayGenerator.LiveThinking;
+                                    if (!string.IsNullOrEmpty(t))
+                                    {
+                                        string s = t.Replace('\n', ' ').Replace('\r', ' ');
+                                        if (s.Length > 80) s = "…" + s.Substring(s.Length - 80);
+                                        PushMessage("AI 思考: " + s);
+                                    }
+                                    if (!asked && elapsed >= ABORT_TIMEOUT_MS)
+                                    {
+                                        asked = true;
+                                        if (AskContinueOrAbort())
+                                        {
+                                            PushMessage("已继续等待 AI 生成...");
+                                            continue;
+                                        }
+                                        Model.Ai.EssayGenerator.AbortActiveRequest();
+                                        string reason = "生成超时（>180 秒），用户终止";
+                                        string diag = Model.Ai.EssayGenerator.LiveDiag;
+                                        string thinking = Model.Ai.EssayGenerator.LiveThinking;
+                                        if (!string.IsNullOrEmpty(thinking))
+                                        {
+                                            string s = thinking.Replace('\n', ' ').Replace('\r', ' ');
+                                            if (s.Length > 80) s = "…" + s.Substring(s.Length - 80);
+                                            reason += " 思考:" + s;
+                                        }
+                                        if (!string.IsNullOrEmpty(diag)) reason += " " + diag;
+                                        bool cloze4Done;
+                                        lock (_essayPreFetchLock)
+                                        {
+                                            cloze4Done = (_cloze4PreFetchResult != null);
+                                            if (!cloze4Done) _cloze4PreFetchError = reason;
+                                        }
+                                        try { System.IO.File.AppendAllText(
+                                            System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "Resources", "ai_diag.log"),
+                                            DateTime.Now + "\nCLOZE4 " + reason + "\n"); } catch { }
+                                        if (!cloze4Done) PushMessage("已停止本次 AI 生成");
+                                        break;
+                                    }
+                                }
+                            }
+                            lock (_essayPreFetchLock)
+                            {
+                                cloze4 = _cloze4PreFetchResult;
+                                cloze4Words = _cloze4PreFetchWords;
+                                _cloze4PreFetchResult = null;
+                                _cloze4PreFetchWords = null;
+                            }
+                        }
+
+                        if (cloze4 == null)
+                        {
+                            string err = _cloze4PreFetchError ?? Model.Ai.EssayGenerator.LiveError;
+                            bool timeoutNotified = !string.IsNullOrEmpty(_cloze4PreFetchError) && _cloze4PreFetchError.Contains("超时");
+                            string diag = Model.Ai.EssayGenerator.LiveDiag;
+                            string msg = "AI 生成失败";
+                            if (!string.IsNullOrEmpty(err)) msg += ": " + err;
+                            if (!string.IsNullOrEmpty(diag)) msg += " [" + diag + "]";
+                            try { System.IO.File.WriteAllText(
+                                System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "Resources", "ai_diag.log"),
+                                DateTime.Now + "\nCLOZE4 " + msg + "\n"); } catch { }
+                            if (!timeoutNotified) { PushMessage(msg); Thread.Sleep(6000); }
+                        }
+                        _cloze4PreFetchError = null;
+
+                        if (cloze4 != null)
+                        {
+                            using (var done = new ManualResetEvent(false))
+                            {
+                                int cloze4Result = 0;
+                                NotificationForm.ShowCloze4ChoicePopup(cloze4,
+                                    cloze4Words.Select(w => w.headWord).ToList(),
+                                    r => { cloze4Result = r; done.Set(); });
+                                done.WaitOne();
+                                int attempted = (cloze4Result >> 16) & 0xFFFF;
+                                int correct = cloze4Result & 0xFFFF;
+                                if (attempted > 0)
+                                {
+                                    ApplyEssaySM2Feedback(cloze4Words, finishedCards, attempted, correct);
+                                    SaveCloze4Log(cloze4Words, cloze4, attempted, correct);
+                                }
+                            }
+                            return;
+                        }
+                        // 20空四选一失败 → fall through 到例句串读
+                    }
+                    if (!_kaoyan)
+                    {
+                    // === 15选10 完形填空（非考研）===
                     Model.Ai.ClozeResult cloze = null;
                     List<Word> clozeWords = null;
                     Task clozeTask = null;
@@ -1398,6 +1584,7 @@ namespace ToastFish.Model.PushControl
                         return;
                     }
                     // 完形填空失败 → fall through 到例句串读
+                    }
                 }
                 else
                 {

@@ -108,6 +108,22 @@ namespace ToastFish.Model.Ai
         public List<ClozeCandidate> Candidates = new List<ClozeCandidate>(); // 15个候选
     }
 
+    /// <summary>20空四选一 完形填空单个空（考研英语完形填空 Use of English 题型）</summary>
+    public class Cloze4Question
+    {
+        public int Blank = -1;                          // 空位序号（1~20）
+        public List<string> Options = new List<string>(); // 4 个选项（正确项位置已随机分布）
+        public int Answer = -1;                         // 正确选项下标 0~3
+    }
+
+    /// <summary>20空四选一 完形填空 AI 生成结果（考研英语专用，2026-09-05）</summary>
+    public class Cloze4Result
+    {
+        public string Text;     // 短文，含 [1]...[20] 挖空标记
+        public string TextCN;   // 中文翻译
+        public List<Cloze4Question> Questions = new List<Cloze4Question>(); // 20 个空
+    }
+
     /// <summary>
     /// DeepSeek（OpenAI 兼容格式）短文生成。
     /// 同步调用（学习后台线程），失败返回 false 不抛异常，调用方回退例句串读。
@@ -202,92 +218,88 @@ namespace ToastFish.Model.Ai
             "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\",\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}" +
             "，answer是正确选项下标(0~3)。只输出纯JSON文本，禁止用markdown代码块包裹。";
 
-        /// <summary>考研英语专用 15选10 prompt（快速版）：逻辑连接词、固定搭配、上下文推理、语境辨析。</summary>
+        /// <summary>考研英语专用 20空四选一 prompt（快速版）：逻辑连接词、固定搭配、上下文推理、语境辨析。</summary>
         private const string CLOZE_PROMPT_KAOYAN =
-            "设计一道15选10选词填空题（模拟考研英语完形填空 Use of English 的选词考查）。" +
+            "设计一道考研英语（一）完形填空（英语知识运用 Use of English，20 空四选一）。" +
             "用户给出一份单词列表，这是他们**刚刚学完的词，应当比较熟悉**。你需要写一篇短文，" +
             "把这些词自然地融入文中，让用户在阅读时看到这些词、巩固记忆。" +
             "" +
             "★★★ 关键原则：挖空与否只看这个词在文中有没有辨析价值，不看它是否在用户列表里 ★★★" +
-            "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出10个最值得挖的词即可。" +
+            "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出20个最值得挖的词即可。" +
             "" +
             "要求：" +
-            "1) 写一篇150~220词的英文短文（考研英语完形填空难度：学术性议论文或说明文，逻辑严密、上下文衔接紧密）。" +
+            "1) 写一篇240~300词的英文短文（考研英语完形填空难度：学术性议论文或说明文，逻辑严密、上下文衔接紧密）。" +
             "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic），自然地融入。" +
             "" +
-            "2) 从短文中选出**恰好10个词**挖空，用[1][2]...[10]依次标记。考研完形填空的选词侧重：" +
+            "2) 从短文中选出**恰好20个词**挖空，用[1][2]...[20]依次标记。考研完形填空的选词侧重：" +
             "a) 逻辑关系词/过渡词（however/therefore/moreover/in contrast/for instance 等）的辨析；" +
             "b) 固定搭配（动词+介词、动词短语、习惯表达）；" +
             "c) 依赖上下文逻辑推理才能确定的词（前后句的转折、因果、递进、让步关系）；" +
-            "d) 有辨析价值——存在同词性但语义或搭配不同的替换词。不选专有名词、数字、冠词。" +
+            "d) 近义词在语境中的细微辨析。不选专有名词、数字、冠词。" +
             "" +
             "★★★ 最重要规则：[N] 是替换符，它完全取代了原文中的一个词 ★★★" +
-            "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 candidates 数组的 word 字段里，正文 text 中绝不能出现任何答案词。" +
+            "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 questions 数组对应项的 options 里，正文 text 中绝不能出现任何答案词。" +
             "错误写法（严禁，等于把答案亮出来）：...compelled me to [1] revise that assumption.（[1] 后紧跟答案 revise）" +
-            "正确写法：...compelled me to [1] that assumption.（revise 已从正文消失，只在 candidates 里）" +
+            "正确写法：...compelled me to [1] that assumption.（revise 已从正文消失，只在 options 里）" +
             "输出前请逐空自检：把正文里每个 [N] 后面紧跟的那个词删掉——若删掉后句子读不通或语义改变，说明你写错了，必须重写该空。" +
             "" +
-            "3) 制作**恰好15个候选词**：10个正确答案（各空位在文中的确切屈折形式）+ 5个干扰词。" +
-            "★★★ 干扰词必须模仿考研英语完形填空真题的干扰方式 ★★★" +
-            "考研完形填空靠逻辑关系辨析、固定搭配、上下文语义和近义词的语境差异制造干扰，而非单纯的词性混淆。" +
-            "干扰词设计标准（每条都必须满足）：" +
-            "a) 词性必须与某个空位相同，使考生无法只靠词性直接排除；" +
-            "b) 优先用三种干扰方式之一：①逻辑关系错误（该填转折却给因果/递进，语法通但逻辑不通）；②固定搭配不当（动宾/介词/主谓搭配不符合英语母语者习惯）；③语境语义偏离（词性对、意思沾边但情感色彩/程度/范围/对象错误）；" +
-            "c) 严格近义词（如 examine/inspect、flaw/defect）做干扰项最多 1 个，且该近义词在语境中必须有明显区分（情感、语体、搭配对象不同）；" +
-            "d) **使用与空位一致的屈折形式**；" +
-            "e) 5个干扰词各自瞄准**不同的**空位，分散干扰；" +
-            "f) **严禁**将用户列表中的词作为干扰词。" +
+            "3) 为每个空制作**4个选项**（1 正确 + 3 干扰），共 20 组（questions 恰好 20 项）。" +
+            "★★★ 干扰项必须模仿考研英语完形填空真题的干扰方式 ★★★" +
+            "考研完形填空靠逻辑关系辨析、固定搭配、上下文语义和近义词的语境差异制造干扰。" +
+            "干扰项设计标准（每组都必须满足）：" +
+            "a) 4 个选项词性必须一致，使考生无法只靠词性排除；" +
+            "b) 干扰项优先用三种方式之一：①逻辑关系错误（该填转折却给因果/递进，语法通但逻辑不通）；②固定搭配不当（动宾/介词/主谓搭配不符合英语母语者习惯）；③语境语义偏离（词性对、意思沾边但情感色彩/程度/范围/对象错误）；" +
+            "c) 每组的 4 个选项应在词形或词义上同属一类（如都是连接词、都是近义动词），增强迷惑性；" +
+            "d) 正确答案的位置（answer 下标 0~3）随机分布，避免集中在某一位置。" +
             "" +
-            "4) 给出短文的中文翻译。★★★ 翻译中不要保留[1]...[10]这些占位符！★★★" +
+            "4) 给出短文的中文翻译。★★★ 翻译中不要保留[1]...[20]这些占位符！★★★" +
             "直接把挖空词对应的中文填入译文，使译文通顺完整、像正常中文段落一样。" +
             "" +
             "输出纯JSON，格式：" +
-            "{\"text\":\"短文含[1]...[10]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\",\"candidates\":[{\"word\":\"正确屈折形式\",\"blank\":1},...,{\"word\":\"正确屈折形式\",\"blank\":10},{\"word\":\"干扰词\",\"blank\":-1},...]}" +
-            "candidates必须恰好15项。blank=1~10为正确答案，-1为干扰词。只输出JSON。";
+            "{\"text\":\"短文含[1]...[20]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\",\"questions\":[{\"blank\":1,\"options\":[\"选项A\",\"选项B\",\"选项C\",\"选项D\"],\"answer\":0},...]}" +
+            "questions必须恰好20项，blank=1~20，每项options恰好4个选项，answer是正确选项下标(0~3)。只输出JSON。";
 
-        /// <summary>考研英语专用 15选10 prompt（推理版）。</summary>
+        /// <summary>考研英语专用 20空四选一 prompt（推理版）。</summary>
         private const string CLOZE_PROMPT_REASON_KAOYAN =
-            "设计一道15选10选词填空题（模拟考研英语完形填空 Use of English 的选词考查）。" +
+            "设计一道考研英语（一）完形填空（英语知识运用 Use of English，20 空四选一）。" +
             "用户给出一份单词列表，这是他们**刚刚学完的词，应当比较熟悉**。你需要写一篇短文，" +
             "把这些词自然地融入文中，让用户在阅读时看到这些词、巩固记忆。" +
             "" +
             "★★★ 关键原则：挖空与否只看这个词在文中有没有辨析价值，不看它是否在用户列表里 ★★★" +
-            "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出10个最值得挖的词即可。" +
+            "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出20个最值得挖的词即可。" +
             "" +
             "要求：" +
             "1) 写一篇英文短文（不设字数限制，按内容需要充分展开）。" +
             "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic），自然地融入。" +
             "短文为学术性议论文或说明文，逻辑严密、上下文衔接紧密，有实质内容和思想深度，值得一读。" +
             "" +
-            "2) 从短文中选出**恰好10个词**挖空，用[1][2]...[10]依次标记。考研完形填空的选词侧重：" +
+            "2) 从短文中选出**恰好20个词**挖空，用[1][2]...[20]依次标记。考研完形填空的选词侧重：" +
             "a) 逻辑关系词/过渡词（however/therefore/moreover/in contrast/for instance 等）的辨析；" +
             "b) 固定搭配（动词+介词、动词短语、习惯表达）；" +
             "c) 依赖上下文逻辑推理才能确定的词（前后句的转折、因果、递进、让步关系）；" +
-            "d) 有辨析价值——存在同词性但语义或搭配不同的替换词。不选专有名词、数字、冠词。" +
+            "d) 近义词在语境中的细微辨析。不选专有名词、数字、冠词。" +
             "" +
             "★★★ 最重要规则：[N] 是替换符，它完全取代了原文中的一个词 ★★★" +
-            "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 candidates 数组的 word 字段里，正文 text 中绝不能出现任何答案词。" +
+            "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 questions 数组对应项的 options 里，正文 text 中绝不能出现任何答案词。" +
             "错误写法（严禁，等于把答案亮出来）：...compelled me to [1] revise that assumption.（[1] 后紧跟答案 revise）" +
-            "正确写法：...compelled me to [1] that assumption.（revise 已从正文消失，只在 candidates 里）" +
+            "正确写法：...compelled me to [1] that assumption.（revise 已从正文消失，只在 options 里）" +
             "输出前请逐空自检：把正文里每个 [N] 后面紧跟的那个词删掉——若删掉后句子读不通或语义改变，说明你写错了，必须重写该空。" +
             "" +
-            "3) 制作**恰好15个候选词**：10个正确答案（各空位在文中的确切屈折形式）+ 5个干扰词。" +
-            "★★★ 干扰词必须模仿考研英语完形填空真题的干扰方式 ★★★" +
-            "考研完形填空靠逻辑关系辨析、固定搭配、上下文语义和近义词的语境差异制造干扰，而非单纯的词性混淆。" +
-            "干扰词设计标准（每条都必须满足）：" +
-            "a) 词性必须与某个空位相同，使考生无法只靠词性直接排除；" +
-            "b) 优先用三种干扰方式之一：①逻辑关系错误（该填转折却给因果/递进，语法通但逻辑不通）；②固定搭配不当（动宾/介词/主谓搭配不符合英语母语者习惯）；③语境语义偏离（词性对、意思沾边但情感色彩/程度/范围/对象错误）；" +
-            "c) 严格近义词（如 examine/inspect、flaw/defect）做干扰项最多 1 个，且该近义词在语境中必须有明显区分（情感、语体、搭配对象不同）；" +
-            "d) **使用与空位一致的屈折形式**；" +
-            "e) 5个干扰词各自瞄准**不同的**空位，分散干扰；" +
-            "f) **严禁**将用户列表中的词作为干扰词。" +
+            "3) 为每个空制作**4个选项**（1 正确 + 3 干扰），共 20 组（questions 恰好 20 项）。" +
+            "★★★ 干扰项必须模仿考研英语完形填空真题的干扰方式 ★★★" +
+            "考研完形填空靠逻辑关系辨析、固定搭配、上下文语义和近义词的语境差异制造干扰。" +
+            "干扰项设计标准（每组都必须满足）：" +
+            "a) 4 个选项词性必须一致，使考生无法只靠词性排除；" +
+            "b) 干扰项优先用三种方式之一：①逻辑关系错误（该填转折却给因果/递进，语法通但逻辑不通）；②固定搭配不当（动宾/介词/主谓搭配不符合英语母语者习惯）；③语境语义偏离（词性对、意思沾边但情感色彩/程度/范围/对象错误）；" +
+            "c) 每组的 4 个选项应在词形或词义上同属一类（如都是连接词、都是近义动词），增强迷惑性；" +
+            "d) 正确答案的位置（answer 下标 0~3）随机分布，避免集中在某一位置。" +
             "" +
-            "4) 给出短文的中文翻译。★★★ 翻译中不要保留[1]...[10]这些占位符！★★★" +
+            "4) 给出短文的中文翻译。★★★ 翻译中不要保留[1]...[20]这些占位符！★★★" +
             "直接把挖空词对应的中文填入译文，使译文通顺完整、像正常中文段落一样。" +
             "" +
             "输出纯JSON文本，格式：" +
-            "{\"text\":\"短文含[1]...[10]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\",\"candidates\":[{\"word\":\"正确屈折形式\",\"blank\":1},...,{\"word\":\"正确屈折形式\",\"blank\":10},{\"word\":\"干扰词\",\"blank\":-1},...]}" +
-            "candidates必须恰好15项。blank=1~10为正确答案，-1为干扰词。只输出纯JSON，**禁止用markdown代码块包裹**。";
+            "{\"text\":\"短文含[1]...[20]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\",\"questions\":[{\"blank\":1,\"options\":[\"选项A\",\"选项B\",\"选项C\",\"选项D\"],\"answer\":0},...]}" +
+            "questions必须恰好20项，blank=1~20，每项options恰好4个选项，answer是正确选项下标(0~3)。只输出纯JSON，**禁止用markdown代码块包裹**。";
 
         /// <summary>流式请求时实时更新的 AI 思考原文。推理模式下预生成 Task 写入，PushMiniReading 读取。</summary>
         public static volatile string LiveThinking = null;
@@ -593,11 +605,10 @@ namespace ToastFish.Model.Ai
                     "candidates必须恰好15项。blank=1~10为正确答案，-1为干扰词。" +
                     "只输出纯JSON，**禁止用markdown代码块包裹**。";
 
-                // 生成轮：system prompt 按当前词库难度动态化 + user 仅发单词表（同词库内命中上下文缓存）
+                // 生成轮：15选10 仅用于非考研词库（考研词库走 TryGenerateCloze4Choice 的 20空四选一）
                 string level = GetBookLevel(bookName);
-                bool kaoyan = !string.IsNullOrEmpty(bookName) && bookName.StartsWith("KaoYan");
-                string clozePrompt = kaoyan ? CLOZE_PROMPT_KAOYAN : CLOZE_PROMPT.Replace("{LEVEL}", level);
-                string clozePromptReason = kaoyan ? CLOZE_PROMPT_REASON_KAOYAN : CLOZE_PROMPT_REASON.Replace("{LEVEL}", level);
+                string clozePrompt = CLOZE_PROMPT.Replace("{LEVEL}", level);
+                string clozePromptReason = CLOZE_PROMPT_REASON.Replace("{LEVEL}", level);
                 bool reason = AiConfig.ModelMode == 1;
                 string body = BuildBody(reason ? clozePromptReason : clozePrompt,
                     string.Join(", ", words.ToArray()), reason, 2000);
@@ -735,6 +746,139 @@ namespace ToastFish.Model.Ai
                 else
                     break;
             }
+        }
+
+        /// <summary>
+        /// 考研英语 20空四选一 完形填空生成（2026-09-05）。
+        /// 同步调用（学习后台线程），失败返回 false 不抛异常，调用方回退。
+        /// </summary>
+        public static bool TryGenerateCloze4Choice(List<string> words, out Cloze4Result result, out string error)
+        {
+            result = null; error = null;
+            LiveError = null;
+            AiConfig.Load();
+            if (string.IsNullOrEmpty(AiConfig.ApiKey)) { error = "未设置 API Key"; LiveError = error; return false; }
+
+            try
+            {
+                bool reason = AiConfig.ModelMode == 1;
+                string body = BuildBody(reason ? CLOZE_PROMPT_REASON_KAOYAN : CLOZE_PROMPT_KAOYAN,
+                    string.Join(", ", words.ToArray()), reason, 2000);
+
+                // 局部函数：推理模式失败（思考过长截断/解析失败）→ 快速模式兜底重试。
+                bool TryFastFallback(out Cloze4Result fb)
+                {
+                    fb = null;
+                    string fbBody = BuildBody(CLOZE_PROMPT_KAOYAN, string.Join(", ", words.ToArray()), false, 2000);
+                    string fbContent, fbError;
+                    if (!PostChat(fbBody, false, out fbContent, out fbError)) return false;
+                    if (!ParseCloze4ChoiceResult(fbContent, out fb, out fbError)) return false;
+                    return true;
+                }
+
+                string content;
+                if (!PostChat(body, reason, out content, out error))
+                {
+                    if (reason && TryFastFallback(out result)) return true;
+                    return false;
+                }
+                if (!ParseCloze4ChoiceResult(content, out result, out error))
+                {
+                    LiveError = error;
+                    LogFailedContent("CLOZE4", words, content, error);
+                    if (reason && TryFastFallback(out result)) return true;
+                    return false;
+                }
+
+                return true;
+            }
+            catch (WebException we)
+            {
+                var r = we.Response as HttpWebResponse;
+                if (r != null)
+                    error = HttpErrorDetail((int)r.StatusCode, ReadResponseBodySafely(we.Response));
+                else
+                    error = "网络错误: " + we.Message;
+                LiveError = error; return false;
+            }
+            catch (Exception e)
+            {
+                error = e.Message;
+                LiveError = error; return false;
+            }
+        }
+
+        /// <summary>解析 20空四选一 JSON 结果（考研英语完形填空）。</summary>
+        private static bool ParseCloze4ChoiceResult(string content, out Cloze4Result result, out string error)
+        {
+            result = null; error = null;
+            if (string.IsNullOrEmpty(content)) { error = "AI 返回内容为空"; return false; }
+
+            int lb = content.IndexOf('{');
+            int rb = content.LastIndexOf('}');
+            if (lb < 0 || rb <= lb) { error = "AI 返回的不是 JSON"; return false; }
+            content = content.Substring(lb, rb - lb + 1);
+
+            Dictionary<string, object> doc;
+            try
+            {
+                doc = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(content);
+            }
+            catch (Exception e) { error = "JSON 解析失败: " + e.Message; return false; }
+            if (doc == null) { error = "JSON 解析结果为空"; return false; }
+
+            var r = new Cloze4Result();
+            r.Text = GetStr(doc, "text");
+            r.TextCN = System.Text.RegularExpressions.Regex.Replace(
+                GetStr(doc, "cn") ?? "", @"\[\d+\]", "");
+            if (string.IsNullOrEmpty(r.Text) || r.Text.Length < 100)
+            { error = "AI 返回短文缺失或过短"; return false; }
+
+            // 解析 questions（AI 返回 blank 1~20）
+            object qsObj;
+            var qs = doc.TryGetValue("questions", out qsObj) ? qsObj as System.Collections.ArrayList : null;
+            if (qs == null || qs.Count < 15) { error = "题目不足（需≥15空，实际" + (qs == null ? 0 : qs.Count) + "）"; return false; }
+
+            var seenBlanks = new HashSet<int>();
+            foreach (object qo in qs)
+            {
+                var qd = qo as Dictionary<string, object>;
+                if (qd == null) continue;
+                var q = new Cloze4Question();
+                object bObj;
+                if (qd.TryGetValue("blank", out bObj))
+                {
+                    try { q.Blank = Convert.ToInt32(bObj); } catch { q.Blank = -1; }
+                }
+                if (q.Blank < 1 || q.Blank > 20 || seenBlanks.Contains(q.Blank)) continue;
+                seenBlanks.Add(q.Blank);
+
+                object opObj;
+                var ops = qd.TryGetValue("options", out opObj) ? opObj as System.Collections.ArrayList : null;
+                if (ops != null)
+                {
+                    foreach (object oo in ops)
+                    {
+                        var s = oo as string;
+                        if (!string.IsNullOrEmpty(s)) q.Options.Add(s);
+                    }
+                }
+                if (q.Options.Count < 4) continue;
+
+                object aObj;
+                if (qd.TryGetValue("answer", out aObj))
+                {
+                    try { q.Answer = Convert.ToInt32(aObj); } catch { q.Answer = -1; }
+                }
+                if (q.Answer < 0 || q.Answer >= q.Options.Count) q.Answer = 0;
+
+                r.Questions.Add(q);
+            }
+
+            if (r.Questions.Count < 15) { error = "有效空位不足（需≥15个，实际" + r.Questions.Count + "）"; return false; }
+
+            result = r;
+            return true;
         }
 
         /// <summary>CLOZE 修正轮：同上。</summary>
