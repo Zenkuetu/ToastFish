@@ -34,6 +34,7 @@ namespace ToastFish.Model.SqliteControl
         public IEnumerable<JpWord> AllJpWordList;
         public IEnumerable<BookCount> CountList;
         List<Card> NewCardLst = new List<Card>();
+        public List<Card> LearningCardLst = new List<Card>();
         List<Card> ReviewedCardLst = new List<Card>();
 
 
@@ -235,6 +236,7 @@ namespace ToastFish.Model.SqliteControl
         {
             // 清空上次学习的卡片列表，防止多次调用积累重复卡片
             NewCardLst.Clear();
+            LearningCardLst.Clear();
             ReviewedCardLst.Clear();
             AllWordList = null;
             AllJpWordList = null;
@@ -276,16 +278,23 @@ namespace ToastFish.Model.SqliteControl
                 Update.CommandText = $"ALTER TABLE {TABLE_NAME} ADD COLUMN dateLastReviewed TEXT  DEFAULT NULL";
                 Update.ExecuteNonQuery();
             }
+            if (HeadTileList.Contains("dateLearingDue") == false)
+            {
+                Update.CommandText = $"ALTER TABLE {TABLE_NAME} ADD COLUMN dateLearingDue TEXT  DEFAULT NULL";
+                Update.ExecuteNonQuery();
+            }
             Word Temp = new Word();
             AllWordList = DataBase.Query<Word>("select * from " + TABLE_NAME, Temp);
 
             foreach (var Word in AllWordList)
             {
                 Card cardi = new Card(Word);
-                if (cardi.status != Cardstatus.Reviewed)
+                if (cardi.status == Cardstatus.New)
                     NewCardLst.Add(cardi);
-                else
+                else if (cardi.status == Cardstatus.Reviewed)
                     ReviewedCardLst.Add(cardi);
+                else
+                    LearningCardLst.Add(cardi);
             }
         }
 
@@ -301,9 +310,13 @@ namespace ToastFish.Model.SqliteControl
                     string dlr = (card.dateLastReviewed == default(DateTime) || card.dateLastReviewed.Year <= 1)
                         ? "NULL"
                         : "'" + card.dateLastReviewed.ToString("yyyy/M/d H:m:s") + "'";
+                    // 学习中的词（Step1/Step2/Relearn）下次到期时间；未设置(0001-01-01)写 NULL
+                    string dld = (card.dateLearingDue == default(DateTime) || card.dateLearingDue.Year <= 1)
+                        ? "NULL"
+                        : "'" + card.dateLearingDue.ToString("yyyy/M/d H:m:s") + "'";
                     String Command = $"UPDATE {TABLE_NAME} SET status = {(int)card.status}, " +
                         $"difficulty ={card.difficulty}, daysBetweenReviews ={card.daysBetweenReviews}, " +
-                        $"lastScore ={card.lastScore}, dateLastReviewed ={dlr} " +
+                        $"lastScore ={card.lastScore}, dateLastReviewed ={dlr}, dateLearingDue ={dld} " +
                         $"WHERE wordRank = {card.word.wordRank};";
                     Update.CommandText = Command;
                     Update.ExecuteNonQuery();
@@ -320,8 +333,12 @@ namespace ToastFish.Model.SqliteControl
         {
             usedReviewedCardLst = new List<Card>();
 
-            if (ReviewedCardLst.Count < maxReviewedCardNumer)
-                maxReviewedCardNumer = ReviewedCardLst.Count;
+            // 只选「已到期」的复习词（percentOverdue >= 1），未到期的宁可不复习，
+            // 避免刚答「牢记」、间隔还很长的词被反复拉出来（2026-09-07 修复）。
+            var overdueList = ReviewedCardLst.Where(c => c.percentOverdue >= 1.0).ToList();
+
+            if (overdueList.Count < maxReviewedCardNumer)
+                maxReviewedCardNumer = overdueList.Count;
 
             // 加权随机选择：SM2+ 得分越低（越不熟）、逾期越长（越该复习），权重越高
             // 公式: weight = (1.0 + percentOverdue) * (1.5 - lastScore)
@@ -330,7 +347,7 @@ namespace ToastFish.Model.SqliteControl
             List<double> weights = new List<double>();
             double totalWeight = 0;
 
-            foreach (var card in ReviewedCardLst)
+            foreach (var card in overdueList)
             {
                 double overdueWeight = 1.0 + card.percentOverdue;
                 double scoreWeight = 1.5 - card.lastScore;
@@ -341,7 +358,7 @@ namespace ToastFish.Model.SqliteControl
             }
 
             // 加权不放回抽样
-            var remainingCards = new List<Card>(ReviewedCardLst);
+            var remainingCards = new List<Card>(overdueList);
             var remainingWeights = new List<double>(weights);
 
             for (int i = 0; i < maxReviewedCardNumer; i++)
@@ -1066,6 +1083,7 @@ namespace ToastFish.Model.SqliteControl
         public double daysBetweenReviews { get; set; }
         public double lastScore { get; set; }
         public String dateLastReviewed { get; set; }
+        public String dateLearingDue { get; set; }
     }
 
     [Serializable]

@@ -81,6 +81,20 @@ namespace ToastFish.Model.SM2plus
                         dateLastReviewed = DateTime.Now;
                 }
             }
+            else if (status != Cardstatus.New)
+            {
+                // Step1/Step2/RelearnStep1/RelearnStep2：解析学习中的下次到期时间
+                if (!string.IsNullOrEmpty(wd.dateLearingDue))
+                {
+                    bool isSuccess2 = DateTime.TryParseExact(wd.dateLearingDue,
+                        new[] { "yyyy/M/d H:m:s", "yyyy/M/d H:mm:ss", "yyyy/MM/dd H:m:s", "yyyy/MM/dd H:mm:ss" },
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None,
+                        out DateTime tempDue);
+                    if (isSuccess2)
+                        dateLearingDue = tempDue;
+                }
+            }
 
         }
 

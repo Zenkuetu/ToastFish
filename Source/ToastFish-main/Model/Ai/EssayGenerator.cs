@@ -169,6 +169,19 @@ namespace ToastFish.Model.Ai
             "若存在问题，输出修正后的完整 JSON（格式与输入一致：{\"en\":\"英文短文\",\"cn\":\"中文翻译\",\"questions\":[{\"q\":\"题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}）。" +
             "只输出 JSON。";
 
+        /// <summary>修正轮 system prompt（考研 Essay 5 题版，2026-09-06）。</summary>
+        private const string REVISE_PROMPT_KAOYAN =
+            "你是考研英语阅读理解命题质量检查员。以下是 AI 生成的短文和 5 道题（JSON）。严格检查：" +
+            "1) 正确选项是否照抄原文词句（必须同义替换/改写）；" +
+            "2) 干扰项是否一眼排除（必须有一定迷惑性，模仿考研真题的偷换概念/以偏概全/无中生有/过度推断/正反混淆/过于绝对等方式）；" +
+            "3) 5 题题型是否覆盖多种（细节理解/推理判断/例证/指代/词义句意猜测/主旨大意/作者态度 7 种，同一题型不超过 2 道）；" +
+            "4) 词义/句意猜测题的被猜词是否出现在短文中但【不在用户单词列表内】（禁止猜用户学过的词）；" +
+            "5) 短文是否自然连贯、确实用上了全部给定单词；" +
+            "6) 每题4个选项的长度是否严格均衡（单词数相同或仅相差1个；正确选项不得长于任何干扰项，否则视为长度泄露答案）。" +
+            "若无问题，输出 {\"ok\":true}。" +
+            "若存在问题，输出修正后的完整 JSON（格式与输入一致：{\"en\":\"英文短文\",\"cn\":\"中文翻译\",\"questions\":[{\"q\":\"题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}）。" +
+            "只输出 JSON。";
+
         /// <summary>修正轮 system prompt（15选10 CLOZE 版）。</summary>
         private const string REVISE_CLOZE_PROMPT =
             "你是{LEVEL}选词填空命题质量检查员。以下是 AI 生成的 15选10 完形填空（JSON）。严格检查：" +
@@ -190,8 +203,8 @@ namespace ToastFish.Model.Ai
             "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文（150~220词），" +
             "文体贴近考研英语（一）阅读理解 Part A：学术性议论文或说明文，题材选自人文社科、科技、经济、法律、心理等领域，" +
             "有明确的论点—论据—论证结构（可含让步、转折、因果、举例、对比），适当使用长难句（从句嵌套、非谓语、插入语、倒装），但表达必须自然地道，禁止为长而长的别扭句子。" +
-            "2)根据短文出3道考研英语水准的英文阅读理解单选题，命题要求：" +
-            "a.题型从以下7种中选3种且互不相同：细节理解、推理判断(infer/imply/suggest/conclude)、例证题(example/illustrate/case，问例子或引文所支持的论点)、指代题(refer to)、词义/句意猜测(the word/sentence ... most likely means)、主旨大意、作者态度；" +
+            "2)根据短文出5道考研英语水准的英文阅读理解单选题，命题要求：" +
+            "a.从以下7种题型中出5题，题型尽量多样、覆盖核心题型（同一题型最多出现2次）：细节理解、推理判断(infer/imply/suggest/conclude)、例证题(example/illustrate/case，问例子或引文所支持的论点)、指代题(refer to)、词义/句意猜测(the word/sentence ... most likely means)、主旨大意、作者态度；" +
             "若出例证题，正确选项必须是例子所支持的**论点**（对原文观点的同义改写），严禁就事论事复述例子本身细节；" +
             "若出指代题，被指代的词/短语必须在原文中有明确且唯一的先行词；" +
             "若出词义/句意猜测题，被猜的词/句必须能结合上下文推断，且【不在用户给定单词列表内】；" +
@@ -207,8 +220,8 @@ namespace ToastFish.Model.Ai
             "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文，不设字数限制，篇幅按内容需要充分展开、不必刻意精简，" +
             "文体贴近考研英语（一）阅读理解 Part A：学术性议论文或说明文，题材选自人文社科、科技、经济、法律、心理等领域，" +
             "有明确的论点—论据—论证结构，内容有深度、值得一读，适当使用长难句（从句嵌套、非谓语、插入语）但表达自然地道。" +
-            "2)根据短文出3道考研英语水准的英文阅读理解单选题，命题要求：" +
-            "a.题型从以下7种中选3种且互不相同：细节理解、推理判断(infer/imply/suggest/conclude)、例证题(example/illustrate/case，问例子或引文所支持的论点)、指代题(refer to)、词义/句意猜测(the word/sentence ... most likely means)、主旨大意、作者态度；" +
+            "2)根据短文出5道考研英语水准的英文阅读理解单选题，命题要求：" +
+            "a.从以下7种题型中出5题，题型尽量多样、覆盖核心题型（同一题型最多出现2次）：细节理解、推理判断(infer/imply/suggest/conclude)、例证题(example/illustrate/case，问例子或引文所支持的论点)、指代题(refer to)、词义/句意猜测(the word/sentence ... most likely means)、主旨大意、作者态度；" +
             "若出例证题，正确选项必须是例子所支持的**论点**（对原文观点的同义改写），严禁就事论事复述例子本身细节；" +
             "若出指代题，被指代的词/短语必须在原文中有明确且唯一的先行词；" +
             "若出词义/句意猜测题，被猜的词/句必须能结合上下文推断，且【不在用户给定单词列表内】；" +
@@ -229,6 +242,7 @@ namespace ToastFish.Model.Ai
             "" +
             "要求：" +
             "1) 写一篇240~300词的英文短文（考研英语完形填空难度：学术性议论文或说明文，逻辑严密、上下文衔接紧密）。" +
+            "语域为**通用学术英语**、平实易懂，严禁密集堆砌特定学科（经济学/心理学/法学等）的专业术语或行话（如 marginal、mediated、alignment 这类依赖学科背景的表达）；偶有 1~2 个通用学术词可接受，但不得成篇集中在某一专业语域。" +
             "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic），自然地融入。" +
             "" +
             "2) 从短文中选出**恰好20个词**挖空，用[1][2]...[20]依次标记。考研完形填空的选词侧重：" +
@@ -236,6 +250,7 @@ namespace ToastFish.Model.Ai
             "b) 固定搭配（动词+介词、动词短语、习惯表达）；" +
             "c) 依赖上下文逻辑推理才能确定的词（前后句的转折、因果、递进、让步关系）；" +
             "d) 近义词在语境中的细微辨析。不选专有名词、数字、冠词。" +
+            "e) 严禁挖依赖特定学科专业义项才能判断的词——如经济学的 marginal（边际的）、心理学的 mediated（由…中介）这类术语。真题挖空靠的是上下文逻辑 + 常见搭配，不是学科专业知识；若一个词的辨析必须借助某学科背景，就换掉它。" +
             "" +
             "★★★ 最重要规则：[N] 是替换符，它完全取代了原文中的一个词 ★★★" +
             "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 questions 数组对应项的 options 里，正文 text 中绝不能出现任何答案词。" +
@@ -272,12 +287,14 @@ namespace ToastFish.Model.Ai
             "1) 写一篇英文短文（不设字数限制，按内容需要充分展开）。" +
             "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic），自然地融入。" +
             "短文为学术性议论文或说明文，逻辑严密、上下文衔接紧密，有实质内容和思想深度，值得一读。" +
+            "语域为**通用学术英语**、平实易懂，严禁密集堆砌特定学科（经济学/心理学/法学等）的专业术语或行话（如 marginal、mediated、alignment 这类依赖学科背景的表达）；偶有 1~2 个通用学术词可接受，但不得成篇集中在某一专业语域。" +
             "" +
             "2) 从短文中选出**恰好20个词**挖空，用[1][2]...[20]依次标记。考研完形填空的选词侧重：" +
             "a) 逻辑关系词/过渡词（however/therefore/moreover/in contrast/for instance 等）的辨析；" +
             "b) 固定搭配（动词+介词、动词短语、习惯表达）；" +
             "c) 依赖上下文逻辑推理才能确定的词（前后句的转折、因果、递进、让步关系）；" +
             "d) 近义词在语境中的细微辨析。不选专有名词、数字、冠词。" +
+            "e) 严禁挖依赖特定学科专业义项才能判断的词——如经济学的 marginal（边际的）、心理学的 mediated（由…中介）这类术语。真题挖空靠的是上下文逻辑 + 常见搭配，不是学科专业知识；若一个词的辨析必须借助某学科背景，就换掉它。" +
             "" +
             "★★★ 最重要规则：[N] 是替换符，它完全取代了原文中的一个词 ★★★" +
             "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 questions 数组对应项的 options 里，正文 text 中绝不能出现任何答案词。" +
@@ -449,15 +466,16 @@ namespace ToastFish.Model.Ai
                 string sysPrompt = kaoyan ? SYS_PROMPT_KAOYAN : SYS_PROMPT.Replace("{LEVEL}", level);
                 string sysPromptReason = kaoyan ? SYS_PROMPT_REASON_KAOYAN : SYS_PROMPT_REASON.Replace("{LEVEL}", level);
                 bool reason = AiConfig.ModelMode == 1;
+                int maxTokens = kaoyan ? 2000 : 1400;  // 考研 5 题输出更长，上调上限防截断
                 string body = BuildBody(reason ? sysPromptReason : sysPrompt,
-                    string.Join(", ", words.ToArray()), reason, 1400);
+                    string.Join(", ", words.ToArray()), reason, maxTokens);
 
                 // 局部函数：推理模式失败（思考过长截断/解析失败）→ 快速模式兜底重试。
                 // 快速模式 thinking disabled + json_object，不会被思考挤占，成功率极高。
                 bool TryFastFallback(out EssayResult fb)
                 {
                     fb = null;
-                    string fbBody = BuildBody(sysPrompt, string.Join(", ", words.ToArray()), false, 1400);
+                    string fbBody = BuildBody(sysPrompt, string.Join(", ", words.ToArray()), false, maxTokens);
                     string fbContent, fbError;
                     if (!PostChat(fbBody, false, out fbContent, out fbError)) return false;
                     if (!ParseResult(fbContent, out fb, out fbError)) return false;
@@ -733,7 +751,9 @@ namespace ToastFish.Model.Ai
             for (int round = 0; round < MAX_REVISE_ROUNDS; round++)
             {
                 string user = string.Join(", ", words.ToArray()) + "\n\n当前短文与题目(JSON):\n" + SerializeEssay(result);
-                string body = BuildBody(REVISE_PROMPT.Replace("{LEVEL}", GetBookLevel(bookName)), user, false, 1400);
+                bool kaoyan = !string.IsNullOrEmpty(bookName) && bookName.StartsWith("KaoYan");
+                string revisePrompt = kaoyan ? REVISE_PROMPT_KAOYAN : REVISE_PROMPT.Replace("{LEVEL}", GetBookLevel(bookName));
+                string body = BuildBody(revisePrompt, user, false, kaoyan ? 2000 : 1400);
                 string c, e;
                 if (!PostChat(body, false, out c, out e))
                     break;

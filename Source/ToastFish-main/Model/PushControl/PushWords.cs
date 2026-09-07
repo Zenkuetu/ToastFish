@@ -503,7 +503,12 @@ namespace ToastFish.Model.PushControl
             Query.GetOverdueReviewedCardList(2 * WordList.Number, out List<Card> ReviewedCardLst);
             //NewCardLst.Count;
             //ReviewedCardLst.Count;
-            List<Card> LearningCardLst = new List<Card>();
+            // 每轮最多处理 2N 个「学习中」词（按到期时间最早优先），其余留待下一轮，
+            // 避免历史累积（dateLearingDue 曾丢失的词）一次性涌出几十个。
+            List<Card> LearningCardLst = Query.LearningCardLst
+                .OrderBy(c => c.dateLearingDue)
+                .Take(2 * WordList.Number)
+                .ToList();
             List<Card> FinishedCardLst = new List<Card>();
 
             double Score;
