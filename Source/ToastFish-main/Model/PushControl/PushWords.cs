@@ -59,6 +59,9 @@ namespace ToastFish.Model.PushControl
         /// <summary>测试模式：本轮学习结束后自动恢复数据库，不保存学习记录。</summary>
         public static volatile bool TestMode = false;
 
+        /// <summary>「学习中」词本轮内重复弹出的次数上限，防止答 Again/Hard 一直不毕业导致死循环。</summary>
+        private const int MAX_ROUND_REPEATS = 6;
+
         // === AI 短文预生成（2026-07-21） ===
         /// <summary>后台预生成的 AI 短文结果，新词学完后启动，复习词阶段异步生成。</summary>
         private static EssayPreFetchResult _essayPreFetchResult = null;
@@ -756,13 +759,18 @@ namespace ToastFish.Model.PushControl
                 int result = a.dateLearingDue.CompareTo(b.dateLearingDue);
                 return result;
             });
+            // 本轮内「学习中」词的重复弹出次数（key=wordRank），用于防死循环上限
+            var roundRepeats = new Dictionary<int, int>();
             while (LearningCardLst.Count != 0)
             {
                 Card Cardj = LearningCardLst[0];
-                // 没到期的词留在 LearningCardLst 等下次学习，避免答 Again/Hard 后立即反复弹（死循环）
-                if (!Cardj.isDue())
+                // 恢复「答错立即重复弹出」机制：答 Again/Hard 的词在本轮反复弹出，直到答记住/牢记毕业。
+                // 每词本轮最多重复 MAX_ROUND_REPEATS 次，超过则留到下次学习，防止一直答 Again 卡死。
+                roundRepeats.TryGetValue(Cardj.word.wordRank, out int reps);
+                if (reps >= MAX_ROUND_REPEATS)
                 {
-                    break;
+                    LearningCardLst.RemoveAt(0);
+                    continue;
                 }
                 Score = pushWords.pushCard(Cardj, Cardj.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
                 if (Score == -1)
@@ -778,6 +786,7 @@ namespace ToastFish.Model.PushControl
                 }
                 else
                 {
+                    roundRepeats[Cardj.word.wordRank] = reps + 1;
                     LearningCardLst.Sort((a, b) =>
                     {
                         // compare a to b to get ascending order
