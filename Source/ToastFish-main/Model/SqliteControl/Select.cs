@@ -163,6 +163,12 @@ namespace ToastFish.Model.SqliteControl
                 Update.CommandText = $"ALTER TABLE Global ADD COLUMN autoLog INTEGER NOT NULL DEFAULT {AUTO_LOG}";
                 Update.ExecuteNonQuery();
             }
+            // AI 短文门控累积列（2026-09-16 新增），幂等 ALTER
+            if (HeadTileList.Contains("pendingEssayWords") == false)
+            {
+                Update.CommandText = "ALTER TABLE Global ADD COLUMN pendingEssayWords TEXT NOT NULL DEFAULT ''";
+                Update.ExecuteNonQuery();
+            }
             Global Temp = new Global();
             var GlobalVariable = DataBase.Query<Global>("select * from Global", Temp).ToArray();
             if (GlobalVariable.Length == 0)
@@ -333,12 +339,22 @@ namespace ToastFish.Model.SqliteControl
         {
             usedReviewedCardLst = new List<Card>();
 
-            // 只选「已到期」的复习词（percentOverdue >= 1），未到期的宁可不复习，
-            // 避免刚答「牢记」、间隔还很长的词被反复拉出来（2026-09-07 修复）。
-            var overdueList = ReviewedCardLst.Where(c => c.percentOverdue >= 1.0).ToList();
+            // 复习池 = 逾期词优先 + 未到期词补足（2026-09-16 修复）
+            // 逾期词（percentOverdue >= 1）全部入池；若不足 maxReviewedCardNumer，
+            // 按「最接近到期」降序用未到期的词补足。
+            // 此前只取逾期词，导致没有逾期词时复习队列恒为空（详见 CLAUDE.md #64）。
+            var reviewPool = ReviewedCardLst.Where(c => c.percentOverdue >= 1.0).ToList();
 
-            if (overdueList.Count < maxReviewedCardNumer)
-                maxReviewedCardNumer = overdueList.Count;
+            if (reviewPool.Count < maxReviewedCardNumer)
+            {
+                reviewPool.AddRange(ReviewedCardLst
+                    .Where(c => c.percentOverdue < 1.0)
+                    .OrderByDescending(c => c.percentOverdue)
+                    .Take(maxReviewedCardNumer - reviewPool.Count));
+            }
+
+            if (reviewPool.Count < maxReviewedCardNumer)
+                maxReviewedCardNumer = reviewPool.Count;
 
             // 加权随机选择：SM2+ 得分越低（越不熟）、逾期越长（越该复习），权重越高
             // 公式: weight = (1.0 + percentOverdue) * (1.5 - lastScore)
@@ -347,7 +363,7 @@ namespace ToastFish.Model.SqliteControl
             List<double> weights = new List<double>();
             double totalWeight = 0;
 
-            foreach (var card in overdueList)
+            foreach (var card in reviewPool)
             {
                 double overdueWeight = 1.0 + card.percentOverdue;
                 double scoreWeight = 1.5 - card.lastScore;
@@ -358,7 +374,7 @@ namespace ToastFish.Model.SqliteControl
             }
 
             // 加权不放回抽样
-            var remainingCards = new List<Card>(overdueList);
+            var remainingCards = new List<Card>(reviewPool);
             var remainingWeights = new List<double>(weights);
 
             for (int i = 0; i < maxReviewedCardNumer; i++)
@@ -686,6 +702,70 @@ namespace ToastFish.Model.SqliteControl
         /// 首次启动时自动修复 SM2+ 参数
         /// 检测标记文件，只运行一次
         /// </summary>
+        /// <summary>
+        /// 读取「待生成 AI 短文的新词」wordRank 列表（2026-09-16 新增，见 CLAUDE.md #67）。
+        /// 存于 Global.pendingEssayWords（JSON 数组），用于「累计 N 个新词才生成一次短文」的门控。
+        /// 使用独立连接，不受调用方（学习线程）事务影响。
+        /// </summary>
+        public static List<int> LoadPendingEssayWords()
+        {
+            var list = new List<int>();
+            try
+            {
+                using (SQLiteConnection db = new SQLiteConnection(
+                    @"Data Source=" + System.IO.Path.GetDirectoryName(
+                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"\Resources\inami.db;Version=3"))
+                {
+                    db.Open();
+                    SQLiteCommand cmd = db.CreateCommand();
+                    cmd.CommandText = "SELECT pendingEssayWords FROM Global LIMIT 1";
+                    object v = cmd.ExecuteScalar();
+                    string json = (v == null || v == DBNull.Value) ? "" : v.ToString();
+                    if (!string.IsNullOrEmpty(json))
+                    {
+                        var jss = new System.Web.Script.Serialization.JavaScriptSerializer();
+                        var arr = jss.Deserialize<List<int>>(json);
+                        if (arr != null) list = arr;
+                    }
+                }
+            }
+            catch { /* 列缺失或 JSON 损坏时按空处理 */ }
+            return list;
+        }
+
+        /// <summary>
+        /// 写入待生成短文的 wordRank 列表（2026-09-16）。
+        /// 测试模式下跳过，避免污染（与 SaveEssayLog 同策略）。
+        /// </summary>
+        public static void SavePendingEssayWords(List<int> ranks)
+        {
+            if (ToastFish.Model.PushControl.PushWords.TestMode) return;
+            try
+            {
+                var jss = new System.Web.Script.Serialization.JavaScriptSerializer();
+                string json = jss.Serialize(ranks ?? new List<int>());
+                using (SQLiteConnection db = new SQLiteConnection(
+                    @"Data Source=" + System.IO.Path.GetDirectoryName(
+                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"\Resources\inami.db;Version=3"))
+                {
+                    db.Open();
+                    SQLiteCommand cmd = db.CreateCommand();
+                    cmd.CommandText = "UPDATE Global SET pendingEssayWords = @j";
+                    cmd.Parameters.AddWithValue("@j", json);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>清空待生成短文的累积列表（生成成功后调用，2026-09-16）。</summary>
+        public static void ClearPendingEssayWords()
+        {
+            SavePendingEssayWords(new List<int>());
+        }
+
         public static void AutoCheckAndFix()
         {
             // 每天最多自动修复一次
@@ -693,6 +773,8 @@ namespace ToastFish.Model.SqliteControl
                 return;
             _fixLastRun = DateTime.Now;
 
+            // 只修复超过该天数未复习的词（避免误伤刚学的新词，见 while 循环内说明）
+            const int STALE_DAYS = 30;
             int totalFixed = 0;
             try
             {
@@ -752,6 +834,14 @@ namespace ToastFish.Model.SqliteControl
                                 catch { try { oldDate = DateTime.ParseExact(dlr.Substring(0, 19), "yyyy-MM-dd H:m:s", null); } catch { } }
                             }
 
+                            // 【2026-09-16】只修复真正「陈旧」的词。
+                            // 新词首次答「牢记」直接进 Reviewed 时，Card.updateCard 算得 daysSpan=0
+                            // → podue=0，故 diff/interval 会**合法地**保持初始值 0.3/3.0，被上面的
+                            // 「是否默认值」判断误判为「未修复」，于是每次启动都刷新其
+                            // dateLastReviewed，使复习被无限推迟（详见 CLAUDE.md #64）。
+                            if ((DateTime.Now - oldDate).TotalDays < STALE_DAYS)
+                                continue;
+
                             double elapsed = Math.Max(0, (DateTime.Now - oldDate).TotalDays);
                             ApplySM2(ref diff, ref interval, score, elapsed);
 
@@ -779,29 +869,14 @@ namespace ToastFish.Model.SqliteControl
                     catch { }
                 }
 
-                // 一次性迁移：对已修复过 SM2+ 参数（diff 或 interval 不再是默认值）
-                // 但 dateLastReviewed 还是旧日期的词，更新 dateLastReviewed 为当前时间
-                // 避免 Card.updateCard() 双重补偿 elapsed time
-                foreach (string table in EnglishTables)
-                {
-                    try
-                    {
-                        SQLiteCommand migrateCmd = db.CreateCommand();
-                        // 仅对"已修复过参数"且"超过7天未复习"的词更新日期
-                        migrateCmd.CommandText = $@"
-                            UPDATE [{table}]
-                            SET dateLastReviewed = @now,
-                                dateLastReviewed_bak = @now
-                            WHERE status = 5
-                              AND dateLastReviewed IS NOT NULL AND dateLastReviewed != ''
-                              AND (ABS(difficulty - 0.3) > 0.001 OR ABS(daysBetweenReviews - 3.0) > 0.01)
-                              AND dateLastReviewed < @weekAgo";
-                        migrateCmd.Parameters.AddWithValue("@now", DateTime.Now.ToString("yyyy/M/d H:m:s"));
-                        migrateCmd.Parameters.AddWithValue("@weekAgo", DateTime.Now.AddDays(-7).ToString("yyyy/M/d"));
-                        migrateCmd.ExecuteNonQuery();
-                    }
-                    catch { }
-                }
+                // 【2026-09-16 已删除】原「一次性迁移」段：
+                //   UPDATE [{table}] SET dateLastReviewed = @now, dateLastReviewed_bak = @now
+                //   WHERE status = 5 AND (diff/interval 已非默认值) AND dateLastReviewed < @weekAgo
+                // 该段用**文本比较**判断日期，而 @weekAgo 格式为 "yyyy/M/d"（无前导零），
+                // 导致 '2026/9/15 ...' < '2026/9/9' 成立（'1' < '9'）——9 号以后学的词
+                // 每次启动都被误判为「超过 7 天未复习」并刷新时间戳，使 percentOverdue
+                // 恒为 0、复习队列恒为空（一次性误刷 1193 词）。该迁移早已完成使命，直接移除。
+                // 严禁再引入文本日期比较，需要比较日期请用 julianday()。
 
                 }  // end using (db)
 
@@ -1114,6 +1189,8 @@ namespace ToastFish.Model.SqliteControl
         public int autoPlay { get; set; }
         public int EngType { get; set; }
         public int autoLog { get; set; }
+        /// <summary>待生成 AI 短文的新词 wordRank（JSON 数组，2026-09-16 新增，见 CLAUDE.md #67）。</summary>
+        public string pendingEssayWords { get; set; }
     }
 
     [Serializable]

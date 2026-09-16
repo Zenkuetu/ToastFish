@@ -618,6 +618,8 @@ namespace ToastFish
             }
             else if (sender.ToString() == "随机五十音测试")
                 TempName = "Goin";
+            // 切换词库 → 清空 AI 短文累积（累积的 wordRank 属于旧词库，切换后无意义，2026-09-16）
+            if (Select.TABLE_NAME != TempName) Select.ClearPendingEssayWords();
             Select.TABLE_NAME = TempName;
             Se.UpdateBookName(TempName);
             Se.UpdateTableCount();
@@ -890,6 +892,30 @@ namespace ToastFish
         {
             // 停止惊喜复习监控
             SurpriseReviewManager.Stop();
+
+            // 退出收尾：统计本次学习分数 + 写入 StudyLog（2026-09-16 修复）
+            // 此前这里直接 Environment.Exit(0)，会绕过 Application.OnExit，导致
+            // App.OnExit 中的 PostLearnApply()/LogStudySession() 从不执行，
+            // StudyLog 表长期无记录（仪表盘统计缺数据）。与 App.OnExit 逻辑保持一致。
+            try
+            {
+                var result = Select.PostLearnApply();
+                if (result.TotalWords > 0)
+                {
+                    string exeDir = System.IO.Path.GetDirectoryName(
+                        System.Reflection.Assembly.GetExecutingAssembly().Location);
+                    using (var db = new System.Data.SQLite.SQLiteConnection(
+                        $"Data Source={System.IO.Path.Combine(exeDir, "Resources", "inami.db")};Version=3"))
+                    {
+                        db.Open();
+                        Model.StudyLog.StudyLogManager.LogStudySession(db, Select.TABLE_NAME,
+                            result.TotalWords, result.EasyCount, result.GoodCount,
+                            result.HardCount, result.AgainCount);
+                    }
+                }
+            }
+            catch { }
+
             // ToastNotificationManagerCompat.History.Clear();
             Environment.Exit(0);
         }

@@ -62,6 +62,14 @@ namespace ToastFish.Model.PushControl
         /// <summary>「学习中」词本轮内重复弹出的次数上限，防止答 Again/Hard 一直不毕业导致死循环。</summary>
         private const int MAX_ROUND_REPEATS = 6;
 
+        // === AI 短文累积门控（2026-09-16 新增，见 CLAUDE.md #67）===
+        /// <summary>累计多少新词才生成一次 AI 短文/完形填空（此前每轮都生成，频率过高）。</summary>
+        private const int ESSAY_MIN_NEW_WORDS = 30;
+        /// <summary>生成短文时额外混入的「已学词」数量（status != 0）。</summary>
+        private const int ESSAY_MIX_LEARNED_WORDS = 10;
+        /// <summary>最终作为短文目标词的词数。</summary>
+        private const int ESSAY_TARGET_WORDS = 8;
+
         // === AI 短文预生成（2026-07-21） ===
         /// <summary>后台预生成的 AI 短文结果，新词学完后启动，复习词阶段异步生成。</summary>
         private static EssayPreFetchResult _essayPreFetchResult = null;
@@ -80,6 +88,15 @@ namespace ToastFish.Model.PushControl
         /// <summary>预生成时决定题型，PushMiniReading 据此取用对应结果。</summary>
         private static bool _preFetchIsCloze = false;
 
+        /// <summary>
+        /// 本轮是否跳过 AI 短文展示（2026-09-16，见 CLAUDE.md #67）。
+        /// **语义：默认 true（跳过）**，只有预生成真正启动时才在取词成功后置 false。
+        /// 为 true 时 PushMiniReading 直接静默返回 —— 既不展示短文，也**不弹「AI 生成失败」**
+        /// （否则门控未开 / 词池不足时都会误报失败）。
+        /// 由 RecitationSM2 每轮开头重置为 true，故不存在跨轮残留。
+        /// </summary>
+        private static volatile bool _essayGateSkipped = true;
+
 
         /// <summary>Sigmoid 函数：1/(1+e^(-x))，用于难度→评分的非线性映射</summary>
         private static double Sigmoid(double x) => 1.0 / (1.0 + Math.Exp(-x));
@@ -95,6 +112,79 @@ namespace ToastFish.Model.PushControl
             catch (Exception ex) { Debug.WriteLine("BeginTestTransaction failed: " + ex.Message); return null; }
         }
         #endregion
+
+        /// <summary>
+        /// 累积本轮新词并决定是否生成 AI 短文/完形填空（2026-09-16 新增，见 CLAUDE.md #67）。
+        /// 返回目标词列表；返回数量 &lt; 3 表示本轮不生成。
+        /// 流程：pendingRanks += 本轮新词（持久化到 Global.pendingEssayWords）
+        ///       → 累计 &gt;= ESSAY_MIN_NEW_WORDS 才继续
+        ///       → 词池 = 全部累积新词（超出 30 的部分也全进）+ ESSAY_MIX_LEARNED_WORDS 个随机已学词
+        ///       → 从池中随机挑 ESSAY_TARGET_WORDS 个。
+        /// 注意：本方法只负责「累积 + 挑选」，清空累积由生成成功的 Task 调用 ClearPendingEssayWords 完成。
+        /// </summary>
+        private static List<Word> PrepareEssayWordPool(List<Card> newCards, List<Word> allWords)
+        {
+            var picked = new List<Word>();
+            try
+            {
+                // 1. 累积本轮新词（无论是否达门控都要记录，供下次继续累加）
+                List<int> pending = Select.LoadPendingEssayWords();
+                if (newCards != null)
+                {
+                    foreach (var c in newCards)
+                    {
+                        if (c == null || c.word == null) continue;
+                        if (!pending.Contains(c.word.wordRank)) pending.Add(c.word.wordRank);
+                    }
+                }
+                Select.SavePendingEssayWords(pending);
+
+                // 2. 门控：累计新词不足 → 本轮不生成（返回 < 3 个词即不会启动预生成）
+                if (pending.Count < ESSAY_MIN_NEW_WORDS) return picked;
+                if (allWords == null || allWords.Count == 0) return picked;
+
+                // 3. 词池 = 累积新词（按 wordRank 找回当前词库的 Word）+ 随机已学词
+                var byRank = new Dictionary<int, Word>();
+                foreach (var w in allWords) { if (w != null) byRank[w.wordRank] = w; }
+
+                var pool = new List<Word>();
+                var inPool = new HashSet<int>();
+                foreach (int r in pending)
+                {
+                    Word w;
+                    if (byRank.TryGetValue(r, out w) && w != null && inPool.Add(r)) pool.Add(w);
+                }
+
+                var learned = new List<Word>();
+                foreach (var w in allWords)
+                {
+                    if (w == null || w.status == 0) continue;
+                    if (!inPool.Contains(w.wordRank)) learned.Add(w);
+                }
+                Random rnd = new Random();
+                Shuffle(learned, rnd);
+                for (int i = 0; i < learned.Count && i < ESSAY_MIX_LEARNED_WORDS; i++)
+                {
+                    if (inPool.Add(learned[i].wordRank)) pool.Add(learned[i]);
+                }
+
+                // 4. 从词池随机挑目标词
+                Shuffle(pool, rnd);
+                for (int i = 0; i < pool.Count && i < ESSAY_TARGET_WORDS; i++) picked.Add(pool[i]);
+            }
+            catch (Exception ex) { Debug.WriteLine("PrepareEssayWordPool: " + ex.Message); }
+            return picked;
+        }
+
+        /// <summary>Fisher-Yates 原地洗牌。</summary>
+        private static void Shuffle<T>(List<T> list, Random rnd)
+        {
+            for (int i = list.Count - 1; i > 0; i--)
+            {
+                int j = rnd.Next(i + 1);
+                T tmp = list[i]; list[i] = list[j]; list[j] = tmp;
+            }
+        }
 
         /// <summary>刷新学习仪表盘 HTML（2026-07-22）。失败静默，不影响学习流程。timeoutMs 为等待 Python 的超时。</summary>
         public static void RefreshDashboard(int timeoutMs = 45000)
@@ -502,6 +592,9 @@ namespace ToastFish.Model.PushControl
                 testTx = Query.DataBase.BeginTransaction();
                 ToastBridge.ShowMessage("ToastFish", "🧪 测试模式 — 本轮结束后自动回滚数据");
             }
+            // 本轮默认「不展示 AI 短文」；仅当下方预生成真正启动时才放开（2026-09-16 门控加固，
+            // 防止门控未开 / 词池不足 / 异常中断时残留上一轮的值而误报「AI 生成失败」）
+            _essayGateSkipped = true;
             Query.GenerateRandomNewCardList(WordList.Number, out List<Card> NewCardLst);
             Query.GetOverdueReviewedCardList(2 * WordList.Number, out List<Card> ReviewedCardLst);
             //NewCardLst.Count;
@@ -568,22 +661,21 @@ namespace ToastFish.Model.PushControl
                 }
             }
 
-            // === AI 短文后台预生成（2026-07-21） ===
-            // 新词阶段结束 → 此时已有足够的目标词 → 启动后台 API 调用，
-            // 在用户处理复习词时异步生成。PushMiniReading 阶段检查结果。
+            // === AI 短文后台预生成（2026-07-21 / 累积门控改版 2026-09-16） ===
+            // 新词阶段结束 → 把本轮新词累积到 Global.pendingEssayWords（持久化，跨程序重启）；
+            // 累计新词 >= ESSAY_MIN_NEW_WORDS 才生成一次（此前每轮都生成，频率过高）。
+            // 词池 = 全部累积新词（超额部分也进）+ ESSAY_MIX_LEARNED_WORDS 个随机已学词，
+            // 再随机挑 ESSAY_TARGET_WORDS 个作为目标词。
+            // 生成成功后由预生成 Task 清零累积；失败/超时则保留、下轮继续累加。
             Model.Ai.AiConfig.Load();
-            if (Model.Ai.AiConfig.ReadingMode == 1 &&
-                (NewCardLst.Count + LearningCardLst.Count + FinishedCardLst.Count) >= 3)
+            if (Model.Ai.AiConfig.ReadingMode == 1)
             {
-                List<Word> fetchWords = new List<Word>();
-                // 收入所有本轮涉及的词（新词 + 学习中 + 复习词），全部参与短文生成
-                foreach (var c in FinishedCardLst) { if (fetchWords.Count < 8) fetchWords.Add(c.word); }
-                foreach (var c in LearningCardLst) { if (fetchWords.Count < 8) fetchWords.Add(c.word); }
-                foreach (var c in NewCardLst)      { if (fetchWords.Count < 8) fetchWords.Add(c.word); }
-                foreach (var c in ReviewedCardLst)  { if (fetchWords.Count < 8) fetchWords.Add(c.word); }
+                List<Word> fetchWords = PrepareEssayWordPool(NewCardLst, Query.AllWordList as List<Word>);
 
                 if (fetchWords.Count >= 3)
                 {
+                    _essayGateSkipped = false;   // 预生成已启动 → 允许 PushMiniReading 进入 AI 分支
+
                     var hws = new List<string>();
                     foreach (var w in fetchWords) hws.Add(w.headWord);
                     var captureWords = fetchWords; // 闭包捕获
@@ -610,6 +702,8 @@ namespace ToastFish.Model.PushControl
                                         _cloze4PreFetchWords = ok ? captureWords : null;
                                         if (!ok) _cloze4PreFetchError = cerr;
                                     }
+                                    // 生成成功 → 清空累积新词；失败/超时保留，下轮继续累加（2026-09-16）
+                                    if (ok) Select.ClearPendingEssayWords();
                                 }
                                 catch (Exception ex)
                                 {
@@ -639,6 +733,8 @@ namespace ToastFish.Model.PushControl
                                         _clozePreFetchWords = ok ? captureWords : null;
                                         if (!ok) _clozePreFetchError = cerr;
                                     }
+                                    // 生成成功 → 清空累积新词；失败/超时保留，下轮继续累加（2026-09-16）
+                                    if (ok) Select.ClearPendingEssayWords();
                                 }
                                 catch (Exception ex)
                                 {
@@ -679,6 +775,8 @@ namespace ToastFish.Model.PushControl
                                         EssayWords = captureWords
                                     };
                                 }
+                                // 生成成功 → 清空累积新词；失败/超时保留，下轮继续累加（2026-09-16）
+                                if (ok) Select.ClearPendingEssayWords();
                             }
                             catch (Exception ex)
                             {
@@ -1360,6 +1458,10 @@ namespace ToastFish.Model.PushControl
             Model.Ai.AiConfig.Load();
             if (Model.Ai.AiConfig.ReadingMode == 1 && roundWords.Count >= 3)
             {
+                // 累积新词未达门控 → 本轮不生成短文，静默跳过整个微阅读环节（2026-09-16）
+                // 必须在此返回：否则下方「预取超时/失败」分支会误报「AI 生成失败」
+                if (_essayGateSkipped) return;
+
                 // 读取预生成阶段决定的题型标志
                 bool useCloze = _preFetchIsCloze;
                 _preFetchIsCloze = false; // 复位
