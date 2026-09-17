@@ -597,6 +597,10 @@ namespace ToastFish.Model.PushControl
             _essayGateSkipped = true;
             Query.GenerateRandomNewCardList(WordList.Number, out List<Card> NewCardLst);
             Query.GetOverdueReviewedCardList(2 * WordList.Number, out List<Card> ReviewedCardLst);
+            // 本轮新词快照（2026-09-17 修复）：NewCardLst 会在下面的 while 循环中被逐个 RemoveAt
+            // 清空，循环退出时已是空列表。而 AI 短文门控需要「本轮学过的新词」完整列表，
+            // 直接把 NewCardLst 传过去会导致累积永远为 0、短文永不生成（见 CHANGELOG #69）。
+            List<Card> NewCardSnapshot = new List<Card>(NewCardLst);
             //NewCardLst.Count;
             //ReviewedCardLst.Count;
             // 每轮最多处理 2N 个「学习中」词（按到期时间最早优先），其余留待下一轮，
@@ -670,7 +674,7 @@ namespace ToastFish.Model.PushControl
             Model.Ai.AiConfig.Load();
             if (Model.Ai.AiConfig.ReadingMode == 1)
             {
-                List<Word> fetchWords = PrepareEssayWordPool(NewCardLst, Query.AllWordList as List<Word>);
+                List<Word> fetchWords = PrepareEssayWordPool(NewCardSnapshot, Query.AllWordList as List<Word>);
 
                 if (fetchWords.Count >= 3)
                 {
