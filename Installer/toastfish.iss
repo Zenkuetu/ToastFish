@@ -3,7 +3,11 @@
 ; 运行: "C:\Users\Cyansu\AppData\Local\Programs\Inno Setup 6\ISCC.exe" toastfish.iss
 
 #define MyAppName "ToastFish"
-#define MyAppVersion "3.0"
+; ★ 版本号唯一来源（Single Source of Truth）—— 发版时只改这一行，
+;   build-installer.ps1 会读取它推导安装包文件名，VersionInfoVersion 由它拼接。
+;   同步项：Source\ToastFish-main\Properties\AssemblyInfo.cs 的 AssemblyVersion/AssemblyFileVersion
+#define MyAppVersion "3.2.5"
+#define MyAppVersion4 MyAppVersion + ".0"
 #define MyAppPublisher "ToastFish"
 #define MyAppExeName "ToastFish.exe"
 #define SourceRoot "E:\ToastFish.v3.0\Installer\staging"
@@ -14,12 +18,12 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppCopyright=Copyright (C) 2026 ToastFish
-VersionInfoVersion=3.0.0.0
+VersionInfoVersion={#MyAppVersion4}
 DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=E:\ToastFish.v3.0\Installer
-OutputBaseFilename=ToastFish-v3.0-Setup
+OutputBaseFilename=ToastFish-v{#MyAppVersion}-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -28,7 +32,7 @@ DisableWelcomePage=no
 DisableProgramGroupPage=yes
 ; 相对路径即可——ISCC 基于 .iss 所在目录解析
 InfoBeforeFile=安装说明.txt
-UninstallDisplayName=ToastFish v3.0
+UninstallDisplayName=ToastFish v{#MyAppVersion}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=E:\ToastFish.v3.0\Source\ToastFish-main\chika64.ico
 

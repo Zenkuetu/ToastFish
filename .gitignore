@@ -47,7 +47,7 @@ Source/**/packages/
 
 # ---------- 安装包产物 ----------
 Installer/staging/
-Installer/ToastFish-v3.0-Setup.exe
+Installer/ToastFish-*-Setup.exe
 
 # ---------- 内置 Python 运行时（构建期由 build-installer.ps1 下载/缓存，不入库） ----------
 Installer/cache/

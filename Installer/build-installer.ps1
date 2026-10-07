@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    ToastFish v3.0 安装包一键构建脚本
+    ToastFish 安装包一键构建脚本
 .DESCRIPTION
     自动完成：编译 C# 源码 → 准备打包文件 → 编译 Inno Setup 安装包
     使用方式: powershell -NoProfile -File build-installer.ps1
@@ -19,6 +19,16 @@ $IssFile     = "$InstallerDir\toastfish.iss"
 $MSBuild     = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
 $ISCC        = "C:\Users\Cyansu\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
 $SlnFile     = "$SourceDir\ToastFish.sln"
+
+# ============ 版本号：从 toastfish.iss 读取（唯一来源），推导安装包文件名 ============
+$IssVersionLine = Select-String -Path $IssFile -Pattern '^#define MyAppVersion "([^"]+)"' -Encoding UTF8 | Select-Object -First 1
+if (-not $IssVersionLine) {
+    Write-Host "❌ 无法从 toastfish.iss 解析 MyAppVersion" -ForegroundColor Red
+    exit 1
+}
+$AppVersion = $IssVersionLine.Matches[0].Groups[1].Value
+$SetupName  = "ToastFish-v$AppVersion-Setup.exe"
+Write-Host "  版本: v$AppVersion    安装包: $SetupName" -ForegroundColor Cyan
 
 # ============ 步骤 1: 编译 C# 项目 ============
 Write-Host "========================================" -ForegroundColor Cyan
@@ -156,7 +166,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  步骤 4/5: 验证产物" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
-$setupExe = "$InstallerDir\ToastFish-v3.0-Setup.exe"
+$setupExe = "$InstallerDir\$SetupName"
 if (Test-Path $setupExe) {
     $size = (Get-Item $setupExe).Length
     $sizeMB = [math]::Round($size / 1MB, 1)
@@ -169,7 +179,7 @@ if (Test-Path $setupExe) {
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  构建完成！安装包位于:" -ForegroundColor Green
-Write-Host "  $InstallerDir\ToastFish-v3.0-Setup.exe" -ForegroundColor Yellow
+Write-Host "  $setupExe" -ForegroundColor Yellow
 Write-Host "========================================" -ForegroundColor Green
 
 # 可选：询问是否立即测试安装

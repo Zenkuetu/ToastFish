@@ -1,4 +1,6 @@
-# ToastFish v3.0
+# ToastFish
+
+> **当前版本：v3.2.5** —— 历史版本与更新说明见 [Releases](https://github.com/Zenkuetu/ToastFish/releases)。
 
 > 一款让你**随时随地、被动地**学习英语 / 日语的 Windows 背单词工具。
 > 常驻系统托盘，主动弹出单词，你只需随手按一下热键作答，在碎片时间里无痛积累词汇量。
