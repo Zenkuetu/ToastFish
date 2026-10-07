@@ -77,6 +77,35 @@ Copy-Item "E:\ToastFish.v3.0\Tools\generate_dashboard.py" "$StagingDir\Resources
 Copy-Item "E:\ToastFish.v3.0\Tools\dashboard.template.html" "$StagingDir\Resources\"
 Copy-Item "E:\ToastFish.v3.0\Tools\essay_api.py" "$StagingDir\Resources\"
 
+# 2e-2. 内置 Python 运行时（issue #2：全新电脑没有 Python，仪表盘生成脚本无法执行）
+Write-Host "  → 准备内置 Python 运行时..."
+$PyCache = "$InstallerDir\cache\python"
+$PyZip   = "$InstallerDir\cache\python-3.11.9-embed-amd64.zip"
+$PyUrl   = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
+if (-not (Test-Path "$PyCache\python.exe")) {
+    if (-not (Test-Path $PyZip)) {
+        Write-Host "    → 首次构建：下载 $PyUrl"
+        New-Item -ItemType Directory -Path "$InstallerDir\cache" -Force | Out-Null
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        try {
+            Invoke-WebRequest -Uri $PyUrl -OutFile $PyZip -UseBasicParsing
+        } catch {
+            Write-Host "❌ 下载 Python 运行时失败：$($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "  请手动下载 $PyUrl 并保存为：$PyZip" -ForegroundColor Yellow
+            exit 1
+        }
+    }
+    Expand-Archive -Path $PyZip -DestinationPath $PyCache -Force
+}
+# 精简：仪表盘只需本地 SQLite + HTTP，去掉 TLS 相关组件（约 -6MB）
+@("libcrypto-3.dll", "libssl-3.dll", "_ssl.pyd", "_hashlib.pyd") | ForEach-Object {
+    Remove-Item "$PyCache\$_" -Force -ErrorAction SilentlyContinue
+}
+# 覆盖可能已随 Resources 复制进来的旧副本，保证 staging 用缓存版本
+Remove-Item "$StagingDir\Resources\python" -Recurse -Force -ErrorAction SilentlyContinue
+Copy-Item -Recurse $PyCache "$StagingDir\Resources\python"
+Write-Host "    内置运行时已就绪（$([math]::Round((Get-ChildItem "$StagingDir\Resources\python" -Recurse -File | Measure-Object Length -Sum).Sum/1MB,1)) MB）" -ForegroundColor White
+
 # 清理数据库运行时残留 + 用户隐私文件（ai_config.txt 含 API Key，绝不能进安装包）
 $resDir = "$StagingDir\Resources"
 @("*.db-shm", "*.db-wal", "*.db.bak", "*.db.*_fix_bak", "*.db.sentence_fix_bak", "*.db.phonetic_bak*", ".sm2_fixed", "ai_config.txt", "ai_diag.log", "dashboard.html") | ForEach-Object {

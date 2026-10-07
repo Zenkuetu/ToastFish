@@ -83,6 +83,27 @@ namespace ToastFish.View
             return p.Y + rtb.Font.Height + 2;
         }
 
+        /// <summary>
+        /// 禁用空格/回车触发弹窗按钮（2026-10-07，GitHub issue #1）。
+        /// WinForms 的 Button 获得焦点后，空格/回车都会触发 Click；而弹窗显示时
+        /// 第一个按钮会自动获得焦点。惊喜复习弹窗是用户打字时突然弹出的，
+        /// 误按空格会被判定为选择了第一个选项并写入 SM2 评分。
+        /// KeyPreview 让窗体先接到按键，SuppressKeyPress 阻止其下发给焦点按钮。
+        /// 答题仍可用 ALT+1~4 全局热键或鼠标点击。
+        /// </summary>
+        private static void SuppressSpaceEnterKeys(Form form)
+        {
+            form.KeyPreview = true;
+            form.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+            };
+        }
+
         public static void ShowWordPopup(string data,
             string[] buttonLabels, Action<int> callback, int timeoutMs = TIMEOUT_WORD)
         {
@@ -234,6 +255,7 @@ namespace ToastFish.View
                         ForeColor = Color.White,
                         FlatStyle = FlatStyle.Flat,
                         Font = FONT_BTN,
+                        TabStop = false,   // 不参与焦点，避免空格/回车误触（issue #1）
                         Tag = idx
                     };
                     btn.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
@@ -256,6 +278,7 @@ namespace ToastFish.View
 
                 _isHidden = false;
                 _current = form;
+                SuppressSpaceEnterKeys(form);
                 form.Show();
             }));
         }
@@ -740,6 +763,7 @@ namespace ToastFish.View
                         Font = FONT_BTN,
                         TextAlign = ContentAlignment.MiddleLeft,
                         Padding = new Padding(12, 0, 0, 0),
+                        TabStop = false,   // 不参与焦点，避免空格/回车误触（issue #1）
                         Tag = idx
                     };
                     btn.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
@@ -763,6 +787,7 @@ namespace ToastFish.View
 
                 _isHidden = false;
                 _current = form;
+                SuppressSpaceEnterKeys(form);
                 form.Show();
                 form.BringToFront();   // 重新抢回置顶带顶部（其他 TopMost 窗口可能在上）
                 // 关闭前一个弹窗时激活权会异步转交给其他窗口（如视频小窗），可能在 BringToFront
@@ -1767,6 +1792,7 @@ namespace ToastFish.View
                         Font = FONT_BTN,
                         TextAlign = ContentAlignment.MiddleLeft,
                         Padding = new Padding(12, 0, 0, 0),
+                        TabStop = false,   // 不参与焦点，避免空格/回车误触（issue #1）
                         Tag = idx
                     };
                     btn.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
@@ -1798,6 +1824,7 @@ namespace ToastFish.View
 
                 _isHidden = false;
                 _current = form;
+                SuppressSpaceEnterKeys(form);
                 form.Show();
             }));
         }

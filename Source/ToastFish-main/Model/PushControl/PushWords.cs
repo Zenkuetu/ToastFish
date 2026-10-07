@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -186,36 +186,98 @@ namespace ToastFish.Model.PushControl
             }
         }
 
-        /// <summary>刷新学习仪表盘 HTML（2026-07-22）。失败静默，不影响学习流程。timeoutMs 为等待 Python 的超时。</summary>
-        public static void RefreshDashboard(int timeoutMs = 45000)
+        /// <summary>
+        /// 刷新学习仪表盘 HTML（2026-07-22 新增；2026-10-07 修复 issue #2）。
+        /// 返回是否成功生成；失败不抛异常、不影响学习流程。timeoutMs 为等待 Python 的超时。
+        /// </summary>
+        public static bool RefreshDashboard(int timeoutMs = 45000)
         {
             try
             {
                 string exeDir = System.AppDomain.CurrentDomain.BaseDirectory;
-                string script = System.IO.Path.Combine(exeDir, "Resources", "generate_dashboard.py");
-                script = System.IO.Path.GetFullPath(script);
-                if (!System.IO.File.Exists(script)) return;
+                string script = System.IO.Path.GetFullPath(
+                    System.IO.Path.Combine(exeDir, "Resources", "generate_dashboard.py"));
+                if (!System.IO.File.Exists(script)) return false;
 
-                var psi = new System.Diagnostics.ProcessStartInfo
+                // 依次尝试候选解释器，任一成功即返回（issue #2：旧版写死 "python"，
+                // 新电脑上会命中微软商店的应用执行别名，脚本根本没执行）
+                foreach (var interp in ResolvePythonInterpreters(exeDir))
                 {
-                    FileName = "python",
-                    Arguments = "\"" + script + "\"",
-                    WorkingDirectory = exeDir,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using (var p = System.Diagnostics.Process.Start(psi))
-                {
-                    if (p == null) return;
-                    // 等待最多 timeoutMs 毫秒，超时就杀（AI 模式下的 WAL 积压最多让查询慢几秒）
-                    if (!p.WaitForExit(timeoutMs))
+                    try
                     {
-                        try { p.Kill(); } catch { }
-                        Debug.WriteLine("RefreshDashboard: Python 超时已终止");
+                        var psi = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = interp[0],
+                            Arguments = interp[1] + "\"" + script + "\"",
+                            WorkingDirectory = exeDir,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        };
+                        using (var p = System.Diagnostics.Process.Start(psi))
+                        {
+                            if (p == null) continue;
+                            // 等待最多 timeoutMs 毫秒，超时就杀（AI 模式下的 WAL 积压最多让查询慢几秒）
+                            if (!p.WaitForExit(timeoutMs))
+                            {
+                                try { p.Kill(); } catch { }
+                                Debug.WriteLine("RefreshDashboard: " + interp[0] + " 超时已终止");
+                                continue;
+                            }
+                            if (p.ExitCode == 0) return true;
+                            Debug.WriteLine("RefreshDashboard: " + interp[0] + " 退出码 " + p.ExitCode);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine("RefreshDashboard: " + interp[0] + " -> " + ex.Message);
                     }
                 }
+                return false;
             }
-            catch (Exception ex) { Debug.WriteLine("RefreshDashboard: " + ex.Message); }
+            catch (Exception ex) { Debug.WriteLine("RefreshDashboard: " + ex.Message); return false; }
+        }
+
+        /// <summary>
+        /// 解析可用的 Python 解释器（2026-10-07，issue #2）。
+        /// 优先级：随程序内置的精简运行时 → py 启动器 → PATH 中的 python.exe。
+        /// 必须排除 %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe——那是微软商店的
+        /// 「应用执行别名」占位程序，运行它只会弹出商店、脚本根本不会被执行，
+        /// 且会让调用方白等一个超时（旧版「仪表盘打不开、只有一个转圈」的根因）。
+        /// 返回每项为 [可执行文件路径, 参数前缀]。
+        /// </summary>
+        private static System.Collections.Generic.List<string[]> ResolvePythonInterpreters(string exeDir)
+        {
+            var list = new System.Collections.Generic.List<string[]>();
+
+            // 1) 随程序内置（安装包会带 Resources\python\python.exe）
+            string bundled = System.IO.Path.Combine(exeDir, "Resources", "python", "python.exe");
+            if (System.IO.File.Exists(bundled)) list.Add(new[] { bundled, "" });
+
+            // 2) py 启动器（只有真正装过 Python 的机器才有）
+            string winDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.Windows);
+            if (!string.IsNullOrEmpty(winDir))
+            {
+                string pyLauncher = System.IO.Path.Combine(winDir, "py.exe");
+                if (System.IO.File.Exists(pyLauncher)) list.Add(new[] { pyLauncher, "-3 " });
+            }
+
+            // 3) PATH 中的 python.exe，跳过微软商店别名
+            string winApps = System.IO.Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                "Microsoft", "WindowsApps");
+            string pathVar = System.Environment.GetEnvironmentVariable("PATH") ?? "";
+            foreach (string dir in pathVar.Split(';'))
+            {
+                if (string.IsNullOrWhiteSpace(dir)) continue;
+                string cand;
+                try { cand = System.IO.Path.Combine(dir.Trim(), "python.exe"); }
+                catch { continue; }
+                if (!System.IO.File.Exists(cand)) continue;
+                if (cand.StartsWith(winApps, System.StringComparison.OrdinalIgnoreCase)) continue; // 商店别名
+                list.Add(new[] { cand, "" });
+                break;
+            }
+            return list;
         }
 
         /// <summary>持久化 AI 短文到 EssayLog 表（2026-07-22）。</summary>

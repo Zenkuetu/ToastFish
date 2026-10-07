@@ -218,6 +218,8 @@ Source: "{#SourceRoot}\Resources\chart.min.js"; DestDir: "{app}\Resources"; Flag
 Source: "{#SourceRoot}\Resources\dashboard.template.html"; DestDir: "{app}\Resources"; Flags: ignoreversion; Components: main
 Source: "{#SourceRoot}\Resources\generate_dashboard.py"; DestDir: "{app}\Resources"; Flags: ignoreversion; Components: main
 Source: "{#SourceRoot}\Resources\essay_api.py"; DestDir: "{app}\Resources"; Flags: ignoreversion; Components: main
+; 内置 Python 运行时（issue #2：全新电脑没有 Python，仪表盘生成脚本无法执行）
+Source: "{#SourceRoot}\Resources\python\*"; DestDir: "{app}\Resources\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: main
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"

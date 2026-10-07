@@ -1,4 +1,4 @@
-﻿using Microsoft.Toolkit.Uwp.Notifications;
+using Microsoft.Toolkit.Uwp.Notifications;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -844,7 +844,24 @@ namespace ToastFish
                 System.AppDomain.CurrentDomain.BaseDirectory,
                 "Resources", "dashboard.html");
             if (System.IO.File.Exists(dashboardPath))
+            {
                 OpenWithBrowser(dashboardPath);
+                return;
+            }
+
+            // issue #2：旧版这里只有 if(Exists) 没有 else —— 新电脑没有 Python 时
+            // 用户只看到一个转圈的鼠标指针，完全不知道发生了什么。现在明确告知。
+            string scriptPath = System.IO.Path.Combine(
+                System.AppDomain.CurrentDomain.BaseDirectory,
+                "Resources", "generate_dashboard.py");
+            System.Windows.Forms.MessageBox.Show(
+                "学习仪表盘生成失败，无法打开。\n\n" +
+                "仪表盘需要 Python 3 才能把学习记录渲染成网页，本机没有找到可用的 Python 运行时。\n\n" +
+                "解决办法：安装 Python 3（https://www.python.org/downloads/ ，安装时务必勾选 " +
+                "\"Add python.exe to PATH\"），然后重新点击本菜单。\n\n" +
+                "生成脚本：" + scriptPath,
+                "学习报告", System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Warning);
         }
         private void OpenWithBrowser(string path)
         {

@@ -49,6 +49,10 @@ Source/**/packages/
 Installer/staging/
 Installer/ToastFish-v3.0-Setup.exe
 
+# ---------- 内置 Python 运行时（构建期由 build-installer.ps1 下载/缓存，不入库） ----------
+Installer/cache/
+ToastFish/Resources/python/
+
 # ---------- 清理备份目录（_trash_backup_*） ----------
 _trash_backup_*/
 

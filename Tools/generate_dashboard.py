@@ -281,7 +281,8 @@ def compute_page2(studylog, words):
     for label, lo, hi in forgetting_buckets:
         bucket_words = [w for w in words if lo < w['daysBetweenReviews'] <= hi]
         n = len(bucket_words)
-        correct = sum(1 for w in bucket_words if w['lastScore'] >= 0.7)
+        # 与 C# 端 SM2+ Parameters.Correct=0.8 一致（2026-07-21 调优），Hard(0.7) 不算正确
+        correct = sum(1 for w in bucket_words if w['lastScore'] >= 0.8)
         rate = round(correct / n * 100, 1) if n > 0 else 0
         forgetting_data.append({
             'label': label, 'midpoint': (lo + min(hi, 120)) / 2,
@@ -319,10 +320,11 @@ def compute_page2(studylog, words):
         })
 
     # --- 难度分布 + 合意区 ---
+    # 边界须 round：i*0.1 在 i=3 时是 0.30000000000000004，会把 difficulty 恰好=0.3 的词错分到低桶
     diff_buckets_detailed = []
     for i in range(10):
-        lo = i * 0.1
-        hi = (i + 1) * 0.1
+        lo = round(i * 0.1, 1)
+        hi = round((i + 1) * 0.1, 1)
         cnt = sum(1 for w in words if lo <= w['difficulty'] < hi)
         diff_buckets_detailed.append({'label': f'{lo:.1f}', 'lo': lo, 'hi': hi, 'count': cnt})
     desirable_zone = {'lo': 0.15, 'hi': 0.35}
