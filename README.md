@@ -8,6 +8,10 @@
 >
 > ☕ 如果它帮到了你，欢迎 [**赞助支持**](#赞助支持)（完全自愿，不影响任何功能）。
 
+<p align="center">
+  <img src="docs/demo.jpg" alt="ToastFish 单词弹窗演示：按 Alt+Q 弹出单词，Alt+1~4 选择记忆程度" width="760">
+</p>
+
 ---
 
 ## 安装（Windows 10 / 11）
