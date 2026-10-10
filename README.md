@@ -129,4 +129,4 @@
 
 本版本基于 [Uahh/ToastFish](https://github.com/Uahh/ToastFish)（MIT License）二次开发。编译方法、二次开发说明与第三方组件清单见 [Source/ToastFish-main/README.md](Source/ToastFish-main/README.md)。
 
-许可证：[MIT License](Source/ToastFish-main/LICENSE)
+许可证：[MIT License](LICENSE) —— 原作者的署名与著作权始终保留。
