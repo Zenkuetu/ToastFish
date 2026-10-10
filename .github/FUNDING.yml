@@ -1,0 +1,6 @@
+# 让 GitHub 仓库页显示「Sponsor / 赞助」按钮
+#
+# 注意：GitHub Sponsors 目前不支持中国大陆创作者收款（payout 地区白名单不含 CN），
+# 因此这里用 custom 指向爱发电。若将来 GitHub Sponsors 可用，可加一行 github: [你的用户名]。
+
+custom: ["https://afdian.com/a/toastfish"]
