@@ -1,6 +1,7 @@
-; ToastFish v3.0 Inno Setup 安装脚本
+; ToastFish Inno Setup 安装脚本
 ; 编译器: ISCC.exe (Inno Setup 6.7+)
-; 运行: "C:\Users\Cyansu\AppData\Local\Programs\Inno Setup 6\ISCC.exe" toastfish.iss
+; 运行: "ISCC.exe" toastfish.iss
+; 说明: 本脚本内所有路径均为相对 .iss 所在目录（Installer\），克隆到任意位置都能编译。
 
 #define MyAppName "ToastFish"
 ; ★ 版本号唯一来源（Single Source of Truth）—— 发版时只改这一行，
@@ -10,7 +11,8 @@
 #define MyAppVersion4 MyAppVersion + ".0"
 #define MyAppPublisher "ToastFish"
 #define MyAppExeName "ToastFish.exe"
-#define SourceRoot "E:\ToastFish.v3.0\Installer\staging"
+; 打包暂存目录（由 build-installer.ps1 生成；相对 .iss 所在目录）
+#define SourceRoot "staging"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
@@ -22,7 +24,7 @@ VersionInfoVersion={#MyAppVersion4}
 DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
-OutputDir=E:\ToastFish.v3.0\Installer
+OutputDir=.
 OutputBaseFilename=ToastFish-v{#MyAppVersion}-Setup
 Compression=lzma2/max
 SolidCompression=yes
@@ -34,7 +36,7 @@ DisableProgramGroupPage=yes
 InfoBeforeFile=安装说明.txt
 UninstallDisplayName=ToastFish v{#MyAppVersion}
 UninstallDisplayIcon={app}\{#MyAppExeName}
-SetupIconFile=E:\ToastFish.v3.0\Source\ToastFish-main\chika64.ico
+SetupIconFile=..\Source\ToastFish-main\chika64.ico
 
 [Messages]
 ; ============ 窗口标题 ============
@@ -263,17 +265,19 @@ begin
   Result := '';
 end;
 
-// 自动搜索可能的旧数据库位置
+// 自动搜索可能的旧数据库位置（均为相对路径，不含硬编码盘符）
 function AutoDetectOldDb: String;
 var
-  DevPath, InstalledPath: String;
+  RepoPath, InstalledPath: String;
 begin
   Result := '';
-  DevPath := 'E:\ToastFish.v3.0\ToastFish\Resources\inami.db';
+  // 1) 开发机：安装包若位于仓库的 Installer\ 目录下，旧库在同级 ToastFish\Resources\
+  RepoPath := ExpandConstant('{src}\..\ToastFish\Resources\inami.db');
+  // 2) 已安装过：%LOCALAPPDATA%\ToastFish\Resources\inami.db
   InstalledPath := ExpandConstant('{localappdata}\ToastFish\Resources\inami.db');
 
-  if FileExists(DevPath) then
-    Result := DevPath
+  if FileExists(RepoPath) then
+    Result := RepoPath
   else if FileExists(InstalledPath) then
     Result := InstalledPath;
 end;

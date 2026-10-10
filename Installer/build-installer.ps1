@@ -4,21 +4,97 @@
 .DESCRIPTION
     自动完成：编译 C# 源码 → 准备打包文件 → 编译 Inno Setup 安装包
     使用方式: powershell -NoProfile -File build-installer.ps1
+              powershell -NoProfile -File build-installer.ps1 -MSBuildPath "..." -ISCCPath "..."
 .NOTES
     文件名: build-installer.ps1
+    路径全部相对本脚本位置推导 —— 仓库克隆到任意目录都能构建。
+    自动探测 MSBuild / ISCC / Python，找不到时给出明确提示。
 #>
+
+param(
+    [string]$MSBuildPath = "",
+    [string]$ISCCPath    = ""
+)
 
 $ErrorActionPreference = "Stop"
 
-# ============ 路径配置 ============
-$SourceDir   = "E:\ToastFish.v3.0\Source\ToastFish-main"
-$RunDir      = "E:\ToastFish.v3.0\ToastFish"
-$StagingDir  = "E:\ToastFish.v3.0\Installer\staging"
-$InstallerDir = "E:\ToastFish.v3.0\Installer"
-$IssFile     = "$InstallerDir\toastfish.iss"
-$MSBuild     = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
-$ISCC        = "C:\Users\Cyansu\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
-$SlnFile     = "$SourceDir\ToastFish.sln"
+# ============ 路径配置（全部相对脚本位置，不写死盘符）============
+$InstallerDir = $PSScriptRoot
+$RepoRoot     = Split-Path $InstallerDir -Parent
+$SourceDir    = Join-Path $RepoRoot "Source\ToastFish-main"
+$RunDir       = Join-Path $RepoRoot "ToastFish"
+$ToolsDir     = Join-Path $RepoRoot "Tools"
+$StagingDir   = Join-Path $InstallerDir "staging"
+$IssFile      = Join-Path $InstallerDir "toastfish.iss"
+$SlnFile      = Join-Path $SourceDir "ToastFish.sln"
+$CacheDir     = Join-Path $InstallerDir "cache"
+
+# ---- 前置检查 ----
+foreach ($p in @($SourceDir, $RunDir, $ToolsDir, $IssFile, $SlnFile)) {
+    if (-not (Test-Path $p)) {
+        Write-Host "❌ 缺少必需路径：$p" -ForegroundColor Red
+        Write-Host "   请确认本脚本位于仓库的 Installer\ 目录下（当前：$InstallerDir）" -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+# ---- MSBuild 自动探测 ----
+function Resolve-MSBuild {
+    param([string]$Explicit)
+    if ($Explicit) {
+        if (Test-Path $Explicit) { return $Explicit }
+        Write-Host "❌ -MSBuildPath 指定的路径不存在：$Explicit" -ForegroundColor Red; exit 1
+    }
+    $c = Get-Command msbuild.exe -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $found = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" 2>$null | Select-Object -First 1
+        if ($found -and (Test-Path $found)) { return $found }
+    }
+    $cands = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\*\*\MSBuild\*\Bin\MSBuild.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+    if ($cands) { return ($cands | Select-Object -Last 1) }
+    Write-Host "❌ 找不到 MSBuild.exe。请安装 Visual Studio 生成工具（含 .NET 桌面生成工具），或用 -MSBuildPath 指定。" -ForegroundColor Red
+    exit 1
+}
+
+# ---- ISCC (Inno Setup) 自动探测 ----
+function Resolve-ISCC {
+    param([string]$Explicit)
+    if ($Explicit) {
+        if (Test-Path $Explicit) { return $Explicit }
+        Write-Host "❌ -ISCCPath 指定的路径不存在：$Explicit" -ForegroundColor Red; exit 1
+    }
+    $c = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    $cands = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+    ) | Where-Object { $_ }
+    foreach ($p in $cands) { if (Test-Path $p) { return $p } }
+    foreach ($rk in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1")) {
+        $loc = (Get-ItemProperty $rk -ErrorAction SilentlyContinue).InstallLocation
+        if ($loc -and (Test-Path (Join-Path $loc "ISCC.exe"))) { return (Join-Path $loc "ISCC.exe") }
+    }
+    Write-Host "❌ 找不到 ISCC.exe。请安装 Inno Setup 6（https://jrsoftware.org/isdl.php），或用 -ISCCPath 指定。" -ForegroundColor Red
+    exit 1
+}
+
+$MSBuild = Resolve-MSBuild -Explicit $MSBuildPath
+$ISCC    = Resolve-ISCC    -Explicit $ISCCPath
+
+# ---- Python（仅构建期用于清洗发行数据库）----
+$Python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+if (-not $Python) { $Python = (Get-Command py.exe -ErrorAction SilentlyContinue).Source }
+if (-not $Python) {
+    Write-Host "❌ 找不到 Python。构建期需要它清洗数据库（Tools\reset_database_for_distribution.py）。" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "  仓库根目录: $RepoRoot" -ForegroundColor DarkGray
+Write-Host "  MSBuild:    $MSBuild" -ForegroundColor DarkGray
+Write-Host "  ISCC:       $ISCC" -ForegroundColor DarkGray
 
 # ============ 版本号：从 toastfish.iss 读取（唯一来源），推导安装包文件名 ============
 $IssVersionLine = Select-String -Path $IssFile -Pattern '^#define MyAppVersion "([^"]+)"' -Encoding UTF8 | Select-Object -First 1
@@ -83,9 +159,9 @@ Copy-Item -Recurse "$RunDir\Resources" $StagingDir
 
 # 复制仪表盘生成器到 Resources（2026-07-22）
 Write-Host "  → 复制仪表盘生成器..."
-Copy-Item "E:\ToastFish.v3.0\Tools\generate_dashboard.py" "$StagingDir\Resources\"
-Copy-Item "E:\ToastFish.v3.0\Tools\dashboard.template.html" "$StagingDir\Resources\"
-Copy-Item "E:\ToastFish.v3.0\Tools\essay_api.py" "$StagingDir\Resources\"
+Copy-Item (Join-Path $ToolsDir "generate_dashboard.py")    "$StagingDir\Resources\"
+Copy-Item (Join-Path $ToolsDir "dashboard.template.html")  "$StagingDir\Resources\"
+Copy-Item (Join-Path $ToolsDir "essay_api.py")             "$StagingDir\Resources\"
 
 # 2e-2. 内置 Python 运行时（issue #2：全新电脑没有 Python，仪表盘生成脚本无法执行）
 Write-Host "  → 准备内置 Python 运行时..."
@@ -127,9 +203,9 @@ Remove-Item "$StagingDir\Microsoft.Toolkit.Uwp.Notifications.dll" -Force -ErrorA
 
 # 2f. 清洗数据库：重置所有学习数据，保留词汇内容
 Write-Host "  → 清洗数据库（重置学习数据，保留词汇）..."
-$ResetScript = "E:\ToastFish.v3.0\Tools\reset_database_for_distribution.py"
+$ResetScript = Join-Path $ToolsDir "reset_database_for_distribution.py"
 $StagingDb = "$StagingDir\Resources\inami.db"
-$null = & python $ResetScript $StagingDb 2>&1
+$null = & $Python $ResetScript $StagingDb 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "❌ 数据库清洗失败！" -ForegroundColor Red
     exit 1
