@@ -919,8 +919,7 @@ namespace ToastFish
                 var result = Select.PostLearnApply();
                 if (result.TotalWords > 0)
                 {
-                    string exeDir = System.IO.Path.GetDirectoryName(
-                        System.Reflection.Assembly.GetExecutingAssembly().Location);
+                    string exeDir = PathHelper.ExeDir;
                     using (var db = new System.Data.SQLite.SQLiteConnection(
                         $"Data Source={System.IO.Path.Combine(exeDir, "Resources", "inami.db")};Version=3"))
                     {

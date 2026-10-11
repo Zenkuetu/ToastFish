@@ -28,7 +28,7 @@ namespace ToastFish.Model.Ai
         {
             get
             {
-                string exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string exeDir = PathHelper.ExeDir;
                 return Path.Combine(exeDir, "Resources", "ai_config.txt");
             }
         }
@@ -1160,7 +1160,7 @@ namespace ToastFish.Model.Ai
         {
             try
             {
-                string dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string dir = PathHelper.ExeDir;
                 string path = Path.Combine(dir, "Resources", "ai_failed_content.log");
                 var sb = new StringBuilder();
                 sb.AppendLine("========================================");

@@ -19,8 +19,7 @@ namespace ToastFish.Model.Download
         /// <param name="url">下载文件地址</param>
         /// <param name="path">文件存放地址，包含文件名</param>
         /// <returns></returns>
-        private static readonly string ExeDir = System.IO.Path.GetDirectoryName(
-            System.Reflection.Assembly.GetExecutingAssembly().Location);
+        private static readonly string ExeDir = PathHelper.ExeDir;
 
         /// <summary>下载锁：串行化 MP3 下载，避免并发写同一临时文件。</summary>
         private static readonly object _dlLock = new object();

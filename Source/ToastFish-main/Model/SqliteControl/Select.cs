@@ -46,8 +46,7 @@ namespace ToastFish.Model.SqliteControl
         {
             //var databasePath = @"Data Source=./Resources/inami.db;Version=3";
             //var databasePath = @"Data Source="+System.IO.Directory.GetCurrentDirectory() + @"\Resources\inami.db;Version=3";
-            string strExeFilePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-            string databasePath = @"Data Source=" + System.IO.Path.GetDirectoryName(strExeFilePath) + @"\Resources\inami.db;Version=3";
+            string databasePath = @"Data Source=" + PathHelper.ExeDir + @"\Resources\inami.db;Version=3";
             return new SQLiteConnection(databasePath);
         }
 
@@ -691,12 +690,7 @@ namespace ToastFish.Model.SqliteControl
         private static DateTime _preBackupTime = DateTime.MinValue;
 
         // 英语词库列表
-        private static readonly string[] EnglishTables = {
-            "CET4_1","CET4_3","CET6_1","CET6_2","CET6_3",
-            "Level4_1","Level4luan_2","Level8_1","Level8luan_2",
-            "KaoYan_1","KaoYan_2","KaoYan_3","IELTS_3","TOEFL_2",
-            "GRE_2","GMAT_3","SAT_2"
-        };
+        private static readonly string[] EnglishTables = WordTables.English;
 
         /// <summary>
         /// 首次启动时自动修复 SM2+ 参数
@@ -713,8 +707,7 @@ namespace ToastFish.Model.SqliteControl
             try
             {
                 using (SQLiteConnection db = new SQLiteConnection(
-                    @"Data Source=" + System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"Data Source=" + PathHelper.ExeDir +
                     @"\Resources\inami.db;Version=3"))
                 {
                     db.Open();
@@ -746,8 +739,7 @@ namespace ToastFish.Model.SqliteControl
                 var jss = new System.Web.Script.Serialization.JavaScriptSerializer();
                 string json = jss.Serialize(ranks ?? new List<int>());
                 using (SQLiteConnection db = new SQLiteConnection(
-                    @"Data Source=" + System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"Data Source=" + PathHelper.ExeDir +
                     @"\Resources\inami.db;Version=3"))
                 {
                     db.Open();
@@ -779,8 +771,7 @@ namespace ToastFish.Model.SqliteControl
             try
             {
                 using (SQLiteConnection db = new SQLiteConnection(
-                    @"Data Source=" + System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"Data Source=" + PathHelper.ExeDir +
                     @"\Resources\inami.db;Version=3"))
                 {
                     db.Open();
@@ -881,8 +872,7 @@ namespace ToastFish.Model.SqliteControl
                 }  // end using (db)
 
                 // 写入标记文件，提示已修复
-                string markerPath = System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) + @"\Resources\.sm2_fixed";
+                string markerPath = PathHelper.ExeDir + @"\Resources\.sm2_fixed";
                 if (totalFixed > 0)
                 {
                     System.IO.File.WriteAllText(markerPath,
@@ -901,8 +891,7 @@ namespace ToastFish.Model.SqliteControl
             try
             {
                 using (SQLiteConnection db = new SQLiteConnection(
-                    @"Data Source=" + System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"Data Source=" + PathHelper.ExeDir +
                     @"\Resources\inami.db;Version=3"))
                 {
                     db.Open();
@@ -932,8 +921,7 @@ namespace ToastFish.Model.SqliteControl
         {
             try
             {
-                string exeDir = System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location);
+                string exeDir = PathHelper.ExeDir;
                 string dbPath = System.IO.Path.Combine(exeDir, "Resources", "inami.db");
                 if (!System.IO.File.Exists(dbPath)) return;
 
@@ -968,8 +956,7 @@ namespace ToastFish.Model.SqliteControl
             try
             {
                 using (SQLiteConnection db = new SQLiteConnection(
-                    @"Data Source=" + System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"Data Source=" + PathHelper.ExeDir +
                     @"\Resources\inami.db;Version=3"))
                 {
                     db.Open();
@@ -1066,8 +1053,7 @@ namespace ToastFish.Model.SqliteControl
             try
             {
                 using (SQLiteConnection db = new SQLiteConnection(
-                    @"Data Source=" + System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"Data Source=" + PathHelper.ExeDir +
                     @"\Resources\inami.db;Version=3"))
                 {
                     db.Open();
@@ -1099,8 +1085,7 @@ namespace ToastFish.Model.SqliteControl
             try
             {
                 using (SQLiteConnection db = new SQLiteConnection(
-                    @"Data Source=" + System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) +
+                    @"Data Source=" + PathHelper.ExeDir +
                     @"\Resources\inami.db;Version=3"))
                 {
                     db.Open();

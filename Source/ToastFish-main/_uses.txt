@@ -1,0 +1,100 @@
+========== A) EnglishTables 用法 ==========
+Model\SqliteControl\Select.cs
+    694:         private static readonly string[] EnglishTables = {
+Model\SqliteControl\Select.cs
+    787:                 foreach (string table in EnglishTables)
+Model\SqliteControl\Select.cs
+    861:                 foreach (string table in EnglishTables)
+Model\SqliteControl\Select.cs
+    910:                     foreach (string table in EnglishTables)
+Model\SqliteControl\Select.cs
+    977:                     foreach (string table in EnglishTables)
+Model\SqliteControl\Select.cs
+   1009:                 foreach (string table in EnglishTables)
+Model\StudyLog\StudyLogManager.cs
+     30:         private static readonly string[] EnglishTables = {
+Model\StudyLog\StudyLogManager.cs
+    249:                 foreach (string table in EnglishTables)
+Model\StudyLog\StudyLogManager.cs
+    326:                 foreach (string table in EnglishTables)
+Model\Sync\SyncProgressManager.cs
+     16:         private static readonly string[] EnglishTables = {
+Model\Sync\SyncProgressManager.cs
+     73:                 string[] allTables = EnglishTables.Concat(JpTables).Concat(GoinTables).ToArray();
+Model\Sync\SyncProgressManager.cs
+    361:                 string[] allTables = EnglishTables.Concat(JpTables).Concat(GoinTables).ToArray();
+
+========== B) GetExecutingAssembly().Location 用法 ==========
+App.xaml.cs
+     18: System.Reflection.Assembly.GetExecutingAssembly().Location);
+App.xaml.cs
+     53: System.Reflection.Assembly.GetExecutingAssembly().Location);
+Model\Ai\EssayGenerator.cs
+     31: string exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+Model\Ai\EssayGenerator.cs
+   1163: string dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+Model\Mp3\DownloadMp3.cs
+     23: System.Reflection.Assembly.GetExecutingAssembly().Location);
+Model\SqliteControl\Select.cs
+     49: string strExeFilePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+Model\SqliteControl\Select.cs
+    717: System.Reflection.Assembly.GetExecutingAssembly().Location) +
+Model\SqliteControl\Select.cs
+    750: System.Reflection.Assembly.GetExecutingAssembly().Location) +
+Model\SqliteControl\Select.cs
+    783: System.Reflection.Assembly.GetExecutingAssembly().Location) +
+Model\SqliteControl\Select.cs
+    885: System.Reflection.Assembly.GetExecutingAssembly().Location) + @"\Resources\.sm2_fixed";
+Model\SqliteControl\Select.cs
+    905: System.Reflection.Assembly.GetExecutingAssembly().Location) +
+Model\SqliteControl\Select.cs
+    936: System.Reflection.Assembly.GetExecutingAssembly().Location);
+Model\SqliteControl\Select.cs
+    972: System.Reflection.Assembly.GetExecutingAssembly().Location) +
+Model\SqliteControl\Select.cs
+   1070: System.Reflection.Assembly.GetExecutingAssembly().Location) +
+Model\SqliteControl\Select.cs
+   1103: System.Reflection.Assembly.GetExecutingAssembly().Location) +
+Model\StartWithWindows\StartWithWindows.cs
+     24: ?? Assembly.GetExecutingAssembly().Location;
+Model\Sync\SyncProgressManager.cs
+     50: System.Reflection.Assembly.GetExecutingAssembly().Location);
+View\NotificationWindow.xaml.cs
+     48: System.Reflection.Assembly.GetExecutingAssembly().Location),
+View\ToastFish.xaml.cs
+    923: System.Reflection.Assembly.GetExecutingAssembly().Location);
+
+========== 各文件 namespace ==========
+  App.xaml.cs                                                ToastFish
+  Model\Ai\EssayGenerator.cs                                 ToastFish.Model.Ai
+  Model\Log\CreateLog.cs                                     ToastFish.Model.Log
+  Model\Mp3\DownloadMp3.cs                                   ToastFish.Model.Download
+  Model\Mp3\PlayMp3.cs                                       ToastFish.Model.Mp3
+  Model\PushControl\GamepadMonitor.cs                        ToastFish.Model.PushControl
+  Model\PushControl\InputMonitor.cs                          ToastFish.Model.PushControl
+  Model\PushControl\PushCustomizeWords.cs                    ToastFish.Model.PushControl
+  Model\PushControl\PushGoinWords.cs                         ToastFish.Model.PushControl
+  Model\PushControl\PushJpWords.cs                           ToastFish.Model.PushControl
+  Model\PushControl\PushWords.cs                             ToastFish.Model.PushControl
+  Model\PushControl\SurpriseReviewManager.cs                 ToastFish.Model.PushControl
+  Model\PushControl\ToastBridge.cs                           ToastFish.Model.PushControl
+  Model\PushControl\WordFormMatcher.cs                       ToastFish.Model.PushControl
+  Model\PushControl\WordType.cs                              ToastFish.Model.PushControl
+  Model\SM2plus\Card.cs                                      ToastFish.Model.SM2plus
+  Model\SM2plus\Parameters.cs                                ToastFish.Model.SM2plus
+  Model\SqliteControl\Select.cs                              ToastFish.Model.SqliteControl
+  Model\StartWithWindows\HotKey.cs                           ToastFish.Model.StartWithWindows
+  Model\StartWithWindows\StartWithWindows.cs                 ToastFish.Model.StartWithWindows
+  Model\StudyLog\StudyLogManager.cs                          ToastFish.Model.StudyLog
+  Model\Sync\SyncProgressManager.cs                          ToastFish.Model.Sync
+  Properties\Resources.Designer.cs                           ToastFish.Properties
+  Properties\Settings.Designer.cs                            ToastFish.Properties
+  Resources\IconChika.Designer.cs                            ToastFish.Resources
+  View\AutoStartWindow.xaml.cs                               ToastFish.View
+  View\NotificationForm.cs                                   ToastFish.View
+  View\NotificationWindow.xaml.cs                            ToastFish.View
+  View\RoundStatsWindow.xaml.cs                              ToastFish.View
+  View\StatsWindow.xaml.cs                                   ToastFish.View
+  View\ToastFish.xaml.cs                                     ToastFish
+  ViewModel\ToastFishModel.cs                                ToastFish.ViewModel
+  ViewModel\ViewModelLocator.cs                              ToastFish.ViewModel

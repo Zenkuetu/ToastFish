@@ -14,8 +14,7 @@ namespace ToastFish
             // 修复开机自启时工作目录不在 exe 目录的问题
             // Windows 注册表 Run 键启动时工作目录默认为 C:\Windows\System32，
             // 导致所有相对路径（Log、Resources、Mp3Cache）失效甚至权限异常崩溃
-            string exeDir = System.IO.Path.GetDirectoryName(
-                System.Reflection.Assembly.GetExecutingAssembly().Location);
+            string exeDir = PathHelper.ExeDir;
             System.IO.Directory.SetCurrentDirectory(exeDir);
 
             base.OnStartup(e);
@@ -49,8 +48,7 @@ namespace ToastFish
                 var result = Select.PostLearnApply();
                 if (result.TotalWords > 0)
                 {
-                    string exeDir = System.IO.Path.GetDirectoryName(
-                        System.Reflection.Assembly.GetExecutingAssembly().Location);
+                    string exeDir = PathHelper.ExeDir;
                     string dbPath = System.IO.Path.Combine(exeDir, "Resources", "inami.db");
                     using (var db = new System.Data.SQLite.SQLiteConnection(
                         $"Data Source={dbPath};Version=3"))

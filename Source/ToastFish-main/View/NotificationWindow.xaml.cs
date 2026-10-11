@@ -44,8 +44,7 @@ namespace ToastFish.View
             {
                 System.IO.File.AppendAllText(
                     System.IO.Path.Combine(
-                        System.IO.Path.GetDirectoryName(
-                            System.Reflection.Assembly.GetExecutingAssembly().Location),
+                        PathHelper.ExeDir,
                         "notify_debug.log"),
                     DateTime.Now.ToString("HH:mm:ss.fff") + " " + msg + "\n");
             }
