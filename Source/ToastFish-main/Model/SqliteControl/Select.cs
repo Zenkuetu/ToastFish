@@ -9,7 +9,7 @@ namespace ToastFish.Model.SqliteControl
 {
     public class Select : IDisposable
     {
-        private static readonly Random _random = new Random();
+        private static readonly Random _random = new SafeRandom();
 
         public Select()
         {

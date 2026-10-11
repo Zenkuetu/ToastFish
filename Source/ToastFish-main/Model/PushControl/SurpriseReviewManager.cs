@@ -25,7 +25,7 @@ namespace ToastFish.Model.PushControl
         public const int SURPRISE_TIMEOUT_MS = 60000;            // 1 分钟
 
         // ============ 状态 ============
-        private static readonly Random _rng = new Random();
+        private static readonly Random _rng = new SafeRandom();
         private static readonly object _rngLock = new object();
         private static volatile bool _surpriseInProgress;
         private static IDisposable _currentSubscription;

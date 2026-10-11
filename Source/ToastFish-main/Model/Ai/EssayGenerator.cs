@@ -1252,7 +1252,7 @@ namespace ToastFish.Model.Ai
             return true;
         }
 
-        private static readonly Random _shuffleRng = new Random();
+        private static readonly Random _shuffleRng = new SafeRandom();
 
         /// <summary>
         /// Fisher-Yates 洗牌，打乱题目选项顺序并同步更新正确选项下标。

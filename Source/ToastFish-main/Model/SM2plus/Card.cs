@@ -18,7 +18,7 @@ namespace ToastFish.Model.SM2plus
     }
     public class Card
     {
-        private static readonly Random _rnd = new Random();
+        private static readonly Random _rnd = new SafeRandom();
         public double difficulty { get; set; }
         public double daysBetweenReviews { get; set; }
         public DateTime dateLastReviewed { get; set; }

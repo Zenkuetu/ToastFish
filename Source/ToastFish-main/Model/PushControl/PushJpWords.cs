@@ -15,7 +15,7 @@ namespace ToastFish.Model.PushControl
     {
         public JpWord GetRandomWord(List<JpWord> WordList)
         {
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             int Index = Rd.Next(WordList.Count);
             return WordList[Index];
         }
@@ -64,7 +64,7 @@ namespace ToastFish.Model.PushControl
             string Question = CurrentWord.tranCN;
             string A = CurrentWord.headWord;
 
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             int AnswerIndex = Rd.Next(3);
             QUESTION_CURRENT_RIGHT_ANSWER = AnswerIndex;
 

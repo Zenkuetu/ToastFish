@@ -149,7 +149,7 @@ namespace ToastFish.Model.PushControl
                 CurrentWord = pushGoinWords.GetRandomGoinWord(TestList);
                 List<GoinWord> FakeWordList = Query.GetTwoGoinRandomWords(CurrentWord);
 
-                Random Rd = new Random();
+                Random Rd = new SafeRandom();
                 int Type = Rd.Next(3);
                 string RightAnswer = "";
                 if(Type == 0)
@@ -214,7 +214,7 @@ namespace ToastFish.Model.PushControl
 
             while (TestList.Count > Number)
             {
-                Random Rd = new Random();
+                Random Rd = new SafeRandom();
                 int Index = Rd.Next(TestList.Count);
                 TestList.RemoveAt(Index);
             }
@@ -231,7 +231,7 @@ namespace ToastFish.Model.PushControl
                 CurrentWord = pushGoinWords.GetRandomGoinWord(TestList);
                 List<GoinWord> FakeWordList = Query.GetTwoGoinRandomWords(CurrentWord);
 
-                Random Rd = new Random();
+                Random Rd = new SafeRandom();
                 int Type = Rd.Next(3);
                 string RightAnswer = "";
                 if (Type == 0)
@@ -312,7 +312,7 @@ namespace ToastFish.Model.PushControl
             string Question = CurrentWord.romaji;
             string A = CurrentWord.hiragana;
 
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             int AnswerIndex = Rd.Next(3);
             QUESTION_CURRENT_RIGHT_ANSWER = AnswerIndex;
 
@@ -383,7 +383,7 @@ namespace ToastFish.Model.PushControl
             string Question = CurrentWord.hiragana;
             string A = CurrentWord.katakana;
 
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             int AnswerIndex = Rd.Next(3);
             QUESTION_CURRENT_RIGHT_ANSWER = AnswerIndex;
 
@@ -454,7 +454,7 @@ namespace ToastFish.Model.PushControl
             string Question = CurrentWord.romaji;
             string A = CurrentWord.katakana;
 
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             int AnswerIndex = Rd.Next(3);
             QUESTION_CURRENT_RIGHT_ANSWER = AnswerIndex;
 
@@ -522,7 +522,7 @@ namespace ToastFish.Model.PushControl
 
         public GoinWord GetRandomGoinWord(List<GoinWord> WordList)
         {
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             int Index = Rd.Next(WordList.Count);
             return WordList[Index];
         }

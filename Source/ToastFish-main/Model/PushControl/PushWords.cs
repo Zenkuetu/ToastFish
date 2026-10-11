@@ -161,7 +161,7 @@ namespace ToastFish.Model.PushControl
                     if (w == null || w.status == 0) continue;
                     if (!inPool.Contains(w.wordRank)) learned.Add(w);
                 }
-                Random rnd = new Random();
+                Random rnd = new SafeRandom();
                 Shuffle(learned, rnd);
                 for (int i = 0; i < learned.Count && i < ESSAY_MIX_LEARNED_WORDS; i++)
                 {
@@ -387,7 +387,7 @@ namespace ToastFish.Model.PushControl
         /// </summary>
         public Word GetRandomWord(List<Word> WordList)
         {
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             int Index = Rd.Next(WordList.Count);
             return WordList[Index];
         }
@@ -395,7 +395,7 @@ namespace ToastFish.Model.PushControl
         public List<Word> GetRandomWordLst(Word CurrentWord, List<Word> WordList, int num)
         {
             Debug.Assert(num < WordList.Count);
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             List<Word> CopyList = new List<Word>(WordList.ToArray());  // Clone<Word>(WordList);
 
             int id1 = CopyList.FindIndex(wordi =>
@@ -747,7 +747,7 @@ namespace ToastFish.Model.PushControl
                     var captureWords = fetchWords; // 闭包捕获
 
                     // 50/50 随机决定题型，只启动一种预生成
-                    bool doClozePrefetch = (new Random().Next(2) == 1);
+                    bool doClozePrefetch = (new SafeRandom().Next(2) == 1);
                     _preFetchIsCloze = doClozePrefetch;
 
                     if (doClozePrefetch)
@@ -1137,7 +1137,7 @@ namespace ToastFish.Model.PushControl
                     else if (CopyList.Count >= 3)
                     {
                         CopyList.Remove(CurrentWord);
-                        Random Rd = new Random();
+                        Random Rd = new SafeRandom();
                         int Index = Rd.Next(CopyList.Count - 1);
                         CopyList.Insert(Index + 1, CurrentWord);
                     }
@@ -1454,7 +1454,7 @@ namespace ToastFish.Model.PushControl
             string Question = CurrentWord.tranCN;
             string A = CurrentWord.headWord;
 
-            Random Rd = new Random();
+            Random Rd = new SafeRandom();
             int AnswerIndex = Rd.Next(3);
             QUESTION_CURRENT_RIGHT_ANSWER = AnswerIndex;
 
@@ -1926,7 +1926,7 @@ namespace ToastFish.Model.PushControl
                 if (rst != 1) return;
 
                 // 例句测验：抽 2 词做"看释义选词"
-                Random rd = new Random();
+                Random rd = new SafeRandom();
                 List<Word> pool = new List<Word>(reading);
                 int quizCount = Math.Min(2, pool.Count);
                 for (int i = 0; i < quizCount; i++)
