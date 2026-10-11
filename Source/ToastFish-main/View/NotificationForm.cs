@@ -17,8 +17,12 @@ namespace ToastFish.View
     {
         private static Form _current;
 
-        // 弹窗状态跟踪（用于隐藏/显示切换）
-        private class PopupState
+        // ── P1 重构（2026-10-08）：供 PopupForm 基类使用的内部访问器 ──
+        internal static Form Current { get { return _current; } set { _current = value; } }
+        internal static bool Hidden  { get { return _isHidden; } set { _isHidden = value; } }
+
+        // 弹窗状态跟踪（用于隐藏/显示切换）—— internal 供 PopupForm 使用
+        internal class PopupState
         {
             public System.Windows.Forms.Timer Timer;
             public int TotalMs;            // 原始超时（毫秒）
@@ -91,7 +95,7 @@ namespace ToastFish.View
         /// KeyPreview 让窗体先接到按键，SuppressKeyPress 阻止其下发给焦点按钮。
         /// 答题仍可用 ALT+1~4 全局热键或鼠标点击。
         /// </summary>
-        private static void SuppressSpaceEnterKeys(Form form)
+        internal static void SuppressSpaceEnterKeys(Form form)
         {
             form.KeyPreview = true;
             form.KeyDown += (s, e) =>
@@ -162,22 +166,10 @@ namespace ToastFish.View
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 200);
 
-                var form = new NoActivateForm
-                {
-                    Text = "ToastFish",
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.Manual,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    Width = formW,
-                    Height = formH,
-                    BackColor = Color.FromArgb(31, 31, 31),
-                    ForeColor = Color.White
-                };
+                var form = new PopupForm(formW, formH, "ToastFish");
 
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.Left = wa.Right - form.Width - 20;
-                form.Top = wa.Bottom - form.Height - 20;
+                form.PlaceBottomRight(wa);
 
                 // === 逐段放置，每段结束后加固定间距 ===
                 int y = 14;
@@ -358,22 +350,10 @@ namespace ToastFish.View
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 140);
 
-                var form = new NoActivateForm
-                {
-                    Text = "ToastFish",
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.Manual,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    Width = formW,
-                    Height = formH,
-                    BackColor = Color.FromArgb(31, 31, 31),
-                    ForeColor = Color.White
-                };
+                var form = new PopupForm(formW, formH, "ToastFish");
 
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.Left = wa.Right - form.Width - 20;
-                form.Top = wa.Bottom - form.Height - 20;
+                form.PlaceBottomRight(wa);
 
                 // === 逐段放置 ===
                 int y = 14;
@@ -486,24 +466,11 @@ namespace ToastFish.View
                 _current?.Close();
                 _current?.Dispose();
 
-                var form = new NoActivateForm
-                {
-                    Text = title,
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.Manual,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    Width = 420,
-                    Height = 160,
-                    BackColor = Color.FromArgb(31, 31, 31),
-                    ForeColor = Color.White,
-                    Font = new Font("Microsoft YaHei UI", 12)
-                };
+                var form = new PopupForm(420, 160, title, font: new Font("Microsoft YaHei UI", 12), margin: 16);
 
                 // 定位右下角
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.Left = wa.Right - form.Width - 16;
-                form.Top = wa.Bottom - form.Height - 16;
+                form.PlaceBottomRight(wa);
 
                 var titleLabel = new Label
                 {
@@ -551,23 +518,10 @@ namespace ToastFish.View
                 _current?.Close();
                 _current?.Dispose();
 
-                var form = new NoActivateForm
-                {
-                    Text = title,
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.Manual,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    Width = 440,
-                    Height = 200,
-                    BackColor = Color.FromArgb(31, 31, 31),
-                    ForeColor = Color.White,
-                    Font = new Font("Microsoft YaHei UI", 12)
-                };
+                var form = new PopupForm(440, 200, title, font: new Font("Microsoft YaHei UI", 12), margin: 16);
 
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.Left = wa.Right - form.Width - 16;
-                form.Top = wa.Bottom - form.Height - 16;
+                form.PlaceBottomRight(wa);
 
                 var titleLabel = new Label
                 {
@@ -704,18 +658,7 @@ namespace ToastFish.View
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 180);
 
-                var form = new NoActivateForm
-                {
-                    Text = "ToastFish",
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.Manual,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    Width = formW,
-                    Height = formH,
-                    BackColor = Color.FromArgb(31, 31, 31),
-                    ForeColor = Color.White
-                };
+                var form = new PopupForm(formW, formH, "ToastFish");
 
                 // 内容超出屏高时启用滚动，选项不会被截断
                 if (needsScroll)
@@ -725,8 +668,7 @@ namespace ToastFish.View
                 }
 
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.Left = wa.Right - form.Width - 20;
-                form.Top = wa.Bottom - form.Height - 20;
+                form.PlaceBottomRight(wa);
 
                 int y = padTop;
 
@@ -888,21 +830,9 @@ namespace ToastFish.View
                 int formH = PAD_TOP + hTitle + LAYOUT_GAP + estH + LAYOUT_GAP + btnH + PAD_BOTTOM;
                 formH = Math.Max(MIN_FORM_H, Math.Min(formH, CapH()));
 
-                var form = new NoActivateForm
-                {
-                    Text = "ToastFish",
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.Manual,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    Width = formW,
-                    Height = formH,
-                    BackColor = Color.FromArgb(31, 31, 31),
-                    ForeColor = Color.White
-                };
+                var form = new PopupForm(formW, formH, "ToastFish");
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.Left = wa.Right - form.Width - 20;
-                form.Top = wa.Bottom - form.Height - 20;
+                form.PlaceBottomRight(wa);
 
                 int y = 14;
                 var tlbl = NewFixedLabel(title, Color.FromArgb(255, 200, 60), fontTitle, pad, y, cw, hTitle);
@@ -1112,21 +1042,9 @@ namespace ToastFish.View
             int formH = PAD_TOP + hTitle + 14 + hInfo + 8 + hStat + 8 + hTime + 14 + btnH + PAD_BOTTOM;
             formH = Math.Max(MIN_FORM_H, Math.Min(formH, CapH()));
 
-            var form = new NoActivateForm
-            {
-                Text = "ToastFish",
-                FormBorderStyle = FormBorderStyle.None,
-                StartPosition = FormStartPosition.Manual,
-                ShowInTaskbar = false,
-                TopMost = true,
-                Width = formW,
-                Height = formH,
-                BackColor = Color.FromArgb(31, 31, 31),
-                ForeColor = Color.White
-            };
+            var form = new PopupForm(formW, formH, "ToastFish");
             var wa = Screen.PrimaryScreen.WorkingArea;
-            form.Left = wa.Right - form.Width - 20;
-            form.Top = wa.Bottom - form.Height - 20;
+            form.PlaceBottomRight(wa);
 
             int y = PAD_TOP;
             var lblTitle = NewFixedLabel(title, Color.FromArgb(255, 200, 60), fontTitle, pad, y, cw, hTitle);
@@ -1250,16 +1168,9 @@ namespace ToastFish.View
                 int essayContentH = 0;   // ContentsResized 报告的真实渲染高度（Shown 时已就绪，比 RealRtbHeight 更可靠）
                 rtb.ContentsResized += (s, e) => essayContentH = e.NewRectangle.Height;
 
-                var form = new NoActivateForm
-                {
-                    Text = "ToastFish", FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.Manual, ShowInTaskbar = false,
-                    TopMost = true, Width = formW, Height = formH,
-                    BackColor = Color.FromArgb(31, 31, 31), ForeColor = Color.White
-                };
+                var form = new PopupForm(formW, formH, "ToastFish");
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.Left = wa.Right - form.Width - 20;
-                form.Top = wa.Bottom - form.Height - 20;
+                form.PlaceBottomRight(wa);
 
                 int y = PAD_TOP;
                 form.Controls.Add(NewFixedLabel(title, Color.FromArgb(255, 200, 60), fontTitle, pad, y, cw, hTitle));
@@ -1733,18 +1644,7 @@ namespace ToastFish.View
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 180);
 
-                var form = new NoActivateForm
-                {
-                    Text = "ToastFish",
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.Manual,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    Width = formW,
-                    Height = formH,
-                    BackColor = Color.FromArgb(31, 31, 31),
-                    ForeColor = Color.White
-                };
+                var form = new PopupForm(formW, formH, "ToastFish");
 
                 // 内容超出屏高时启用滚动，选项不会被截断
                 if (needsScroll)
@@ -1754,8 +1654,7 @@ namespace ToastFish.View
                 }
 
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.Left = wa.Right - form.Width - 20;
-                form.Top = wa.Bottom - form.Height - 20;
+                form.PlaceBottomRight(wa);
 
                 int y = padTop;
 
@@ -2044,19 +1943,8 @@ namespace ToastFish.View
                 int formH = titleH + pad + passageH + 6 + blankHintH + 1 + blankBarH + 6 + candHintH + 1 + candBarH + 4 + statusH + 6 + submitBtnH + pad;
                 Action ResizeForPassage = null;
 
-                var form = new NoActivateForm
-                {
-                    Text = "ToastFish - 15选10 完形填空",
-                    Size = new Size(formW, formH),
-                    StartPosition = FormStartPosition.Manual,
-                    Left = wa.Right - formW - 20,
-                    Top = wa.Bottom - formH - 20,
-                    FormBorderStyle = FormBorderStyle.None,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    BackColor = Color.FromArgb(32, 32, 48),
-                    ForeColor = Color.FromArgb(230, 230, 230)
-                };
+                var form = new PopupForm(formW, formH, "ToastFish - 15选10 完形填空", back: Color.FromArgb(32, 32, 48), fore: Color.FromArgb(230, 230, 230));
+form.PlaceBottomRight();
 
                 // 1. 标题
                 int y = pad;
@@ -2659,19 +2547,8 @@ namespace ToastFish.View
                 formH = Math.Min(formH, CapH());
 
                 int y = pad;
-                var form = new NoActivateForm
-                {
-                    Width = formW,
-                    Height = formH,
-                    Left = wa.Right - formW - 20,
-                    Top = wa.Bottom - formH - 20,
-                    StartPosition = FormStartPosition.Manual,
-                    FormBorderStyle = FormBorderStyle.None,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    BackColor = Color.FromArgb(32, 32, 48),
-                    ForeColor = Color.FromArgb(230, 230, 230)
-                };
+                var form = new PopupForm(formW, formH, "ToastFish", back: Color.FromArgb(32, 32, 48), fore: Color.FromArgb(230, 230, 230));
+form.PlaceBottomRight();
 
                 // 1. 标题
                 form.Controls.Add(new Label
@@ -2930,6 +2807,105 @@ namespace ToastFish.View
         protected override bool ShowWithoutActivation
         {
             get { return true; }
+        }
+    }
+
+    /// <summary>
+    /// 所有 ToastFish 弹窗的基类（P1 重构，2026-10-08）。
+    ///
+    /// 把原先散在 11 个弹窗方法里的**横切样板**集中到一处：
+    ///   · 外观：无边框 / 不占任务栏 / 置顶 / 手动定位 / 深色主题
+    ///   · 定位：屏幕工作区右下角，含统一边距
+    ///   · 生命周期：超时 Timer + PopupState、_current 注册与注销、FormClosed 统一清理
+    ///   · 显示：ShowAsCurrent() 一次完成「注册 + 可选防空格回车 + 不抢焦点显示」
+    ///
+    /// 基类**只接管样板，不碰各弹窗的布局代码**（测量与摆放 label/button 仍在各自方法内）。
+    /// 继承自 NoActivateForm —— 显示时用 SW_SHOWNOACTIVATE，不夺取前台焦点。
+    /// </summary>
+    internal class PopupForm : NoActivateForm
+    {
+        /// <summary>深色主题默认背景（原先 11 处各自硬编码）</summary>
+        public static readonly Color DefaultBack = Color.FromArgb(31, 31, 31);
+        /// <summary>默认前景色</summary>
+        public static readonly Color DefaultFore = Color.White;
+        /// <summary>默认右下角边距（避免与 Control.DefaultMargin 冲突）</summary>
+        public const int DefaultEdge = 20;
+
+        /// <summary>超时定时器（无时限时为 null；ALT+H 隐藏/恢复剩余时间要用）</summary>
+        public System.Windows.Forms.Timer Timer { get; private set; }
+
+        /// <summary>距屏幕工作区右下角的边距</summary>
+        public int ScreenMargin { get; private set; }
+
+        public PopupForm(int width, int height, string title = "ToastFish",
+                         Color? back = null, Color? fore = null,
+                         Font font = null, int margin = DefaultEdge)
+        {
+            Text = title;
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            ShowInTaskbar = false;
+            TopMost = true;
+            Width = width;
+            Height = height;
+            BackColor = back ?? DefaultBack;
+            ForeColor = fore ?? DefaultFore;
+            if (font != null) Font = font;
+            ScreenMargin = margin;
+        }
+
+        /// <summary>定位到屏幕工作区右下角（原先 11 处各写 3 行的样板）</summary>
+        public void PlaceBottomRight()
+        {
+            PlaceBottomRight(Screen.PrimaryScreen.WorkingArea);
+        }
+
+        /// <summary>用已取到的工作区矩形定位（避免重复取 Screen）</summary>
+        public void PlaceBottomRight(Rectangle wa)
+        {
+            Left = wa.Right - Width - ScreenMargin;
+            Top = wa.Bottom - Height - ScreenMargin;
+        }
+
+        /// <summary>
+        /// 挂超时定时器；<paramref name="timeoutMs"/> &lt;= 0 表示无时限（不建 Timer）。
+        /// 同时写入 PopupState，供 ALT+H 隐藏/恢复剩余时间使用。
+        /// </summary>
+        public void ArmTimer(int timeoutMs, Action onTimeout)
+        {
+            if (timeoutMs <= 0) return;
+            var t = new System.Windows.Forms.Timer { Interval = timeoutMs };
+            t.Tick += (s, e) => { t.Stop(); onTimeout(); };
+            t.Start();
+            Timer = t;
+            Tag = new NotificationForm.PopupState
+            {
+                Timer = t,
+                TotalMs = timeoutMs,
+                StartedAt = DateTime.Now,
+                PausedRemainingMs = -1
+            };
+        }
+
+        /// <summary>
+        /// 注册为「当前弹窗」并显示（不抢焦点），同时接管 FormClosed 统一清理：
+        /// 额外清理 → Timer.Dispose → 注销 _current → 复位隐藏标志 → Dispose。
+        /// </summary>
+        public void ShowAsCurrent(bool suppressSpaceEnter = false, Action onClosed = null)
+        {
+            FormClosed += (s, e) =>
+            {
+                if (onClosed != null) { try { onClosed(); } catch { } }
+                if (Timer != null) Timer.Dispose();
+                if (NotificationForm.Current == this) NotificationForm.Current = null;
+                NotificationForm.Hidden = false;
+                Dispose();
+            };
+
+            if (suppressSpaceEnter) NotificationForm.SuppressSpaceEnterKeys(this);
+            NotificationForm.Hidden = false;
+            NotificationForm.Current = this;
+            Show();
         }
     }
 }
