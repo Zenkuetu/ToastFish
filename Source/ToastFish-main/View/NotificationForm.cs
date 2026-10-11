@@ -162,7 +162,7 @@ namespace ToastFish.View
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 200);
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = "ToastFish",
                     FormBorderStyle = FormBorderStyle.None,
@@ -358,7 +358,7 @@ namespace ToastFish.View
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 140);
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = "ToastFish",
                     FormBorderStyle = FormBorderStyle.None,
@@ -486,7 +486,7 @@ namespace ToastFish.View
                 _current?.Close();
                 _current?.Dispose();
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = title,
                     FormBorderStyle = FormBorderStyle.None,
@@ -551,7 +551,7 @@ namespace ToastFish.View
                 _current?.Close();
                 _current?.Dispose();
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = title,
                     FormBorderStyle = FormBorderStyle.None,
@@ -704,7 +704,7 @@ namespace ToastFish.View
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 180);
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = "ToastFish",
                     FormBorderStyle = FormBorderStyle.None,
@@ -888,7 +888,7 @@ namespace ToastFish.View
                 int formH = PAD_TOP + hTitle + LAYOUT_GAP + estH + LAYOUT_GAP + btnH + PAD_BOTTOM;
                 formH = Math.Max(MIN_FORM_H, Math.Min(formH, CapH()));
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = "ToastFish",
                     FormBorderStyle = FormBorderStyle.None,
@@ -1112,7 +1112,7 @@ namespace ToastFish.View
             int formH = PAD_TOP + hTitle + 14 + hInfo + 8 + hStat + 8 + hTime + 14 + btnH + PAD_BOTTOM;
             formH = Math.Max(MIN_FORM_H, Math.Min(formH, CapH()));
 
-            var form = new Form
+            var form = new NoActivateForm
             {
                 Text = "ToastFish",
                 FormBorderStyle = FormBorderStyle.None,
@@ -1250,7 +1250,7 @@ namespace ToastFish.View
                 int essayContentH = 0;   // ContentsResized 报告的真实渲染高度（Shown 时已就绪，比 RealRtbHeight 更可靠）
                 rtb.ContentsResized += (s, e) => essayContentH = e.NewRectangle.Height;
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = "ToastFish", FormBorderStyle = FormBorderStyle.None,
                     StartPosition = FormStartPosition.Manual, ShowInTaskbar = false,
@@ -1733,7 +1733,7 @@ namespace ToastFish.View
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 180);
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = "ToastFish",
                     FormBorderStyle = FormBorderStyle.None,
@@ -2044,7 +2044,7 @@ namespace ToastFish.View
                 int formH = titleH + pad + passageH + 6 + blankHintH + 1 + blankBarH + 6 + candHintH + 1 + candBarH + 4 + statusH + 6 + submitBtnH + pad;
                 Action ResizeForPassage = null;
 
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Text = "ToastFish - 15选10 完形填空",
                     Size = new Size(formW, formH),
@@ -2659,7 +2659,7 @@ namespace ToastFish.View
                 formH = Math.Min(formH, CapH());
 
                 int y = pad;
-                var form = new Form
+                var form = new NoActivateForm
                 {
                     Width = formW,
                     Height = formH,
@@ -2906,6 +2906,30 @@ namespace ToastFish.View
                 _current = form;
                 form.Show();
             }));
+        }
+    }
+
+    /// <summary>
+    /// 不抢焦点的弹窗基类（2026-10-08）。
+    ///
+    /// 背景：此前所有弹窗都是直接 new Form + Show()。Windows 在显示新窗口时会把它设为
+    /// 前台窗口，导致用户正在使用的程序（编辑器 / 浏览器 / 视频 / 游戏）被挤到后台，
+    /// 打字或操作被硬生生打断。
+    ///
+    /// ShowWithoutActivation = true 时，WinForms 内部改用 ShowWindow(SW_SHOWNOACTIVATE)
+    /// 显示窗口：弹窗照常 TopMost 恒显示在最上层、照常可点击，但不会成为前台窗口、
+    /// 不夺取键盘焦点。
+    ///
+    /// ⚠️ 这里刻意【不设置】WS_EX_NOACTIVATE：
+    /// WS_EX_NOACTIVATE 会让窗口永远无法激活，用户点击后回车 / ESC / Tab 焦点仍然无效；
+    /// 而只覆写 ShowWithoutActivation，则「显示时绝不抢焦点，用户主动点击后仍可正常激活」，
+    /// 既满足不打断使用的要求，又保留完整键盘语义（ShowWithButtons 依赖回车确认）。
+    /// </summary>
+    internal class NoActivateForm : Form
+    {
+        protected override bool ShowWithoutActivation
+        {
+            get { return true; }
         }
     }
 }
