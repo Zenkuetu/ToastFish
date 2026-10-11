@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -97,6 +97,18 @@ namespace ToastFish.Model.PushControl
         /// </summary>
         private static volatile bool _essayGateSkipped = true;
 
+        /// <summary>
+        /// 本轮是否已由用户确认生成 AI 短文（2026-10-11 新增）。
+        ///
+        /// 语义：**每轮开头由用户确认** —— 累计新词达到 ESSAY_MIN_NEW_WORDS 时，
+        /// RecitationSM2 开头弹「是否在本轮生成短文」；用户选「暂不生成」则本轮跳过，
+        /// 且**本轮新词继续累积**（下轮再问）。默认 false。
+        ///
+        /// 与 _essayGateSkipped 的分工：本标志表达**用户意愿**，
+        /// _essayGateSkipped 表达**预生成是否真的启动**（供 PushMiniReading 判断），两者互不影响。
+        /// </summary>
+        private static volatile bool _essayConfirmedThisRound = false;
+
 
         /// <summary>Sigmoid 函数：1/(1+e^(-x))，用于难度→评分的非线性映射</summary>
         private static double Sigmoid(double x) => 1.0 / (1.0 + Math.Exp(-x));
@@ -112,6 +124,34 @@ namespace ToastFish.Model.PushControl
             catch (Exception ex) { Debug.WriteLine("BeginTestTransaction failed: " + ex.Message); return null; }
         }
         #endregion
+
+        /// <summary>
+        /// 新开一轮时询问用户「累计已满 N 个新词，本轮是否生成 AI 短文？」（2026-10-11 新增）。
+        ///
+        /// 背景：原先累计满 30 词后**每轮新词学完就自动生成**，用户毫无准备、会打乱安排。
+        /// 现改为**轮次开头**由用户确认；选「暂不生成」则本轮跳过且新词继续累积，下轮再问。
+        ///
+        /// 返回 true=本轮生成，false=本轮跳过。
+        /// **超时 / 异常 / 用户点「暂不生成」一律返回 false** —— 宁可下次再问，也不擅自打断学习。
+        /// </summary>
+        private static bool AskGenerateEssay(int pendingCount)
+        {
+            try
+            {
+                Task<int> t = ToastBridge.ShowInteractive(
+                    "AI 短文",
+                    "已累计 " + pendingCount + " 个新词，是否在本轮结束时生成 AI 短文？",
+                    new[] { "生成短文", "暂不生成" }, 30000);
+
+                if (!t.Wait(35000)) return false;   // 弹窗未正常返回：兜底不生成
+                return t.Result == 0;               // 0=生成短文；1=暂不生成；-1=超时
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("AskGenerateEssay: " + ex.Message);
+                return false;
+            }
+        }
 
         /// <summary>
         /// 累积本轮新词并决定是否生成 AI 短文/完形填空（2026-09-16 新增，见 CLAUDE.md #67）。
@@ -139,7 +179,12 @@ namespace ToastFish.Model.PushControl
                 }
                 Select.SavePendingEssayWords(pending);
 
-                // 2. 门控：累计新词不足 → 本轮不生成（返回 < 3 个词即不会启动预生成）
+                // 2. 门控 A（2026-10-11 新增）：本轮开头用户未确认生成 → 只累积、不生成。
+                //    注意累积已在上面完成，故用户选「暂不生成」时本轮新词照样并入 pending，
+                //    累积继续增长，下一轮开头会再次询问。
+                if (!_essayConfirmedThisRound) return picked;
+
+                // 3. 门控 B：累计新词不足 → 本轮不生成（返回 < 3 个词即不会启动预生成）
                 if (pending.Count < ESSAY_MIN_NEW_WORDS) return picked;
                 if (allWords == null || allWords.Count == 0) return picked;
 
@@ -657,6 +702,26 @@ namespace ToastFish.Model.PushControl
             // 本轮默认「不展示 AI 短文」；仅当下方预生成真正启动时才放开（2026-09-16 门控加固，
             // 防止门控未开 / 词池不足 / 异常中断时残留上一轮的值而误报「AI 生成失败」）
             _essayGateSkipped = true;
+
+            // === AI 短文：本轮是否生成，改由用户在**轮次开头**确认（2026-10-11） ===
+            // 原先累计满 30 词后在新词学完时自动生成，用户毫无准备、打乱安排。
+            // 现在：进入新一轮时若累计已达门控，先问一句；「暂不生成」则本轮跳过，
+            // 本轮新词仍继续累积（见 PrepareEssayWordPool 的门控 A）。
+            _essayConfirmedThisRound = false;
+            try
+            {
+                Model.Ai.AiConfig.Load();
+                if (Model.Ai.AiConfig.ReadingMode == 1)
+                {
+                    int pendingNow = Select.LoadPendingEssayWords().Count;
+                    if (pendingNow >= ESSAY_MIN_NEW_WORDS)
+                    {
+                        _essayConfirmedThisRound = AskGenerateEssay(pendingNow);
+                    }
+                }
+            }
+            catch (Exception ex) { Debug.WriteLine("AskGenerateEssay(gate): " + ex.Message); }
+
             Query.GenerateRandomNewCardList(WordList.Number, out List<Card> NewCardLst);
             Query.GetOverdueReviewedCardList(2 * WordList.Number, out List<Card> ReviewedCardLst);
             // 本轮新词快照（2026-09-17 修复）：NewCardLst 会在下面的 while 循环中被逐个 RemoveAt
