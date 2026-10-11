@@ -1,6 +1,6 @@
 # ToastFish
 
-> **当前版本：v3.2.5** —— 历史版本与更新说明见 [Releases](https://github.com/Zenkuetu/ToastFish/releases)。
+> **当前版本：v3.2.6** —— 历史版本与更新说明见 [Releases](https://github.com/Zenkuetu/ToastFish/releases)。
 
 > 一款让你**随时随地、被动地**学习英语 / 日语的 Windows 背单词工具。
 >
@@ -31,7 +31,7 @@
 
 ## 安装（Windows 10 / 11）
 
-1. 到 [Releases](https://github.com/Zenkuetu/ToastFish/releases/latest) 下载最新的安装包（`ToastFish-v3.2.5-Setup.exe`）。
+1. 到 [Releases](https://github.com/Zenkuetu/ToastFish/releases/latest) 下载最新的安装包（`ToastFish-v3.2.6-Setup.exe`）。
 2. 双击运行。**无需管理员权限**，默认安装到 `%LOCALAPPDATA%\ToastFish`。
 3. 从开始菜单（或桌面快捷方式）启动，程序会最小化到系统托盘。
 
