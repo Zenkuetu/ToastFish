@@ -33,7 +33,7 @@ namespace ToastFish.View
         private static bool _isHidden = false;
 
         // 弹窗超时常量（毫秒）
-        public const int TIMEOUT_WORD  = 180000;  // 单词弹窗：3分钟
+        public const int TIMEOUT_WORD  = 180000; // 单词弹窗：3分钟
         public const int TIMEOUT_QUIZ  = 300000;  // 测验弹窗：5分钟
         public const int TIMEOUT_MSG   = 5000;    // 简短通知：5秒
         public const int TIMEOUT_DIALOG = 180000; // 交互弹窗：3分钟
@@ -256,7 +256,14 @@ namespace ToastFish.View
                 }
 
                 var timer = new System.Windows.Forms.Timer { Interval = timeoutMs };
-                timer.Tick += (s, e) => { timer.Stop(); callback(-1); form.Close(); };
+                timer.Tick += (s, e) =>
+                {
+                    // 超时不再关闭弹窗（旧行为：关闭后本轮永久卡死，Alt+Q 也没有任何反应）。
+                    // 改为隐藏并保留 _current，用户按 Alt+Q / Alt+H 可重新显示、继续本轮进度。
+                    timer.Stop();
+                    form.Hide();
+                    _isHidden = true;
+                };
                 timer.Start();
                 form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
 
@@ -715,7 +722,14 @@ namespace ToastFish.View
                 }
 
                 var timer = new System.Windows.Forms.Timer { Interval = timeoutMs };
-                timer.Tick += (s, e) => { timer.Stop(); callback(-1); form.Close(); };
+                timer.Tick += (s, e) =>
+                {
+                    // 超时不再关闭弹窗（旧行为：关闭后等待答案的复习线程永久卡死）。
+                    // 改为隐藏并保留 _current，用户按 Alt+Q / Alt+H 可重新显示、继续答题。
+                    timer.Stop();
+                    form.Hide();
+                    _isHidden = true;
+                };
                 timer.Start();
                 form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
 
@@ -1577,6 +1591,18 @@ namespace ToastFish.View
                 _current.Hide();
                 _isHidden = true;
             }
+        }
+
+        /// <summary>
+        /// 重新显示当前被隐藏的弹窗（Alt+H 手动隐藏，或单词/测验弹窗超时自动收起）。
+        /// 返回 true 表示确实恢复了被隐藏的弹窗；false 表示当前没有可恢复的弹窗。
+        /// </summary>
+        public static bool ResumeCurrentPopup()
+        {
+            if (_current == null || _current.IsDisposed) return false;
+            if (!_isHidden) return false;   // 弹窗本来就在屏幕上，无需恢复
+            ToggleVisibility();
+            return true;
         }
 
         /// <summary>

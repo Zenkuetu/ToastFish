@@ -166,6 +166,10 @@ namespace ToastFish
         System.Windows.Forms.ToolStripMenuItem SetAiEssay = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SetAiModel = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SetAiKey = new System.Windows.Forms.ToolStripMenuItem();
+        System.Windows.Forms.ToolStripMenuItem SetAiProvider = new System.Windows.Forms.ToolStripMenuItem();
+        System.Windows.Forms.ToolStripMenuItem SetAiModels = new System.Windows.Forms.ToolStripMenuItem();
+        System.Windows.Forms.ToolStripMenuItem SetAiFastModel = new System.Windows.Forms.ToolStripMenuItem();
+        System.Windows.Forms.ToolStripMenuItem SetAiReasonModel = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SetTestMode = new System.Windows.Forms.ToolStripMenuItem();
         private new void ContextMenu()
         {
@@ -210,7 +214,21 @@ namespace ToastFish
             SetAiModel.Click += new EventHandler(AiModel_Click);
             SetAiModel.Checked = (Model.Ai.AiConfig.ModelMode == 1);
 
-            SetAiKey.Text = "设置 DeepSeek Key";
+            // AI 模型名设置：任何服务商都能改快速/推理模型名，按服务商分别记忆（以后出模型不用改代码）
+            SetAiModels.Text = "设置 AI 模型名";
+            SetAiFastModel = MakeModelItem("快速模型名（" + Model.Ai.AiConfig.Model + "）", false);
+            SetAiReasonModel = MakeModelItem("推理模型名（" + Model.Ai.AiConfig.ReasonModel + "）", true);
+            SetAiModels.DropDownItems.Add(SetAiFastModel);
+            SetAiModels.DropDownItems.Add(SetAiReasonModel);
+
+            // AI 服务商切换：DeepSeek / Kimi（开放平台）/ Kimi Code 订阅 / 自定义（任意 OpenAI 兼容端点）
+            SetAiProvider.Text = "AI 服务商（" + Model.Ai.AiConfig.ProviderName + "）";
+            SetAiProvider.DropDownItems.Add(MakeProviderItem("DeepSeek", Model.Ai.AiConfig.ProviderDeepSeek));
+            SetAiProvider.DropDownItems.Add(MakeProviderItem("Kimi（开放平台）", Model.Ai.AiConfig.ProviderKimi));
+            SetAiProvider.DropDownItems.Add(MakeProviderItem("Kimi Code 订阅", Model.Ai.AiConfig.ProviderKimiCode));
+            SetAiProvider.DropDownItems.Add(MakeProviderItem("自定义（兼容 OpenAI）", Model.Ai.AiConfig.ProviderCustom));
+
+            SetAiKey.Text = "设置 " + Model.Ai.AiConfig.ProviderName + " Key";
             SetAiKey.Click += new EventHandler(AiKey_Click);
 
             SetTestMode.Text = "测试模式";
@@ -382,6 +400,8 @@ namespace ToastFish
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAutoLog);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAiEssay);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAiModel);
+            ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAiModels);
+            ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAiProvider);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAiKey);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetTestMode);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(ResetLearingStatus);
@@ -398,9 +418,14 @@ namespace ToastFish
             if (SurpriseReviewManager.IsSurpriseInProgress)
                 return;
 
-            // 学习已在运行中，忽略重复触发
+            // 学习已在运行中：若弹窗被隐藏（Alt+H 手动隐藏，或单词/测验弹窗超时自动收起），
+            // 由 Alt+Q 重新显示它、继续当前进度；确实没有可恢复的弹窗时给一句提示，避免"按了没反应"。
             if (PushWords.IsLearningActive)
+            {
+                if (!NotificationForm.ResumeCurrentPopup() && NotificationForm.Current == null)
+                    NotificationForm.ShowMessage("ToastFish", "本轮复习仍在进行中，请稍候…");
                 return;
+            }
 
             if (!System.IO.Directory.Exists("Log"))  {
                 System.IO.Directory.CreateDirectory("Log");
@@ -786,7 +811,7 @@ namespace ToastFish
         private void AiKey_Click(object sender, EventArgs e)
         {
             if (PromptAiKey())
-                NotificationForm.ShowMessage("ToastFish", "DeepSeek API Key 已保存");
+                NotificationForm.ShowMessage("ToastFish", Model.Ai.AiConfig.ProviderName + " API Key 已保存");
         }
 
         /// <summary>测试模式切换：学完自动恢复数据库，不影响真实学习记录。</summary>
@@ -801,12 +826,123 @@ namespace ToastFish
             NotificationForm.ShowMessage("ToastFish", msg);
         }
 
-        /// <summary>弹输入框设置 DeepSeek API Key，成功保存返回 true</summary>
+        /// <summary>构造一个「设置 AI 模型名」子菜单项，Tag 标记是快速模型还是推理模型。</summary>
+        private System.Windows.Forms.ToolStripMenuItem MakeModelItem(string text, bool reason)
+        {
+            var item = new System.Windows.Forms.ToolStripMenuItem();
+            item.Text = text;
+            item.Tag = reason;
+            item.Click += new EventHandler(AiModelName_Click);
+            return item;
+        }
+
+        /// <summary>修改当前服务商的快速/推理模型名。填的是 Model ID（如 kimi-k2.6 / k3-256k），改动按服务商分别记忆。</summary>
+        private void AiModelName_Click(object sender, EventArgs e)
+        {
+            var item = sender as System.Windows.Forms.ToolStripMenuItem;
+            if (item == null) return;
+            bool reason = item.Tag is bool && (bool)item.Tag;
+            string title = reason ? "推理模型名" : "快速模型名";
+            string current = reason ? Model.Ai.AiConfig.ReasonModel : Model.Ai.AiConfig.Model;
+            string input = Microsoft.VisualBasic.Interaction.InputBox(
+                "请输入 " + Model.Ai.AiConfig.ProviderName + " 的" + title
+                + "（填 Model ID，例如 kimi-k2.6 / k3-256k / deepseek-v4-pro）：\n当前：" + current,
+                "ToastFish - AI 模型名", current);
+            if (string.IsNullOrWhiteSpace(input)) return;
+            if (reason) Model.Ai.AiConfig.ReasonModel = input.Trim();
+            else Model.Ai.AiConfig.Model = input.Trim();
+            Model.Ai.AiConfig.Save();
+            RefreshAiModelMenuText();
+            NotificationForm.ShowMessage("ToastFish",
+                Model.Ai.AiConfig.ProviderName + " 的" + title + "已设置为：" + input.Trim());
+        }
+
+        /// <summary>同步「设置 AI 模型名」子菜单上显示的当前模型名。</summary>
+        private void RefreshAiModelMenuText()
+        {
+            SetAiFastModel.Text = "快速模型名（" + Model.Ai.AiConfig.Model + "）";
+            SetAiReasonModel.Text = "推理模型名（" + Model.Ai.AiConfig.ReasonModel + "）";
+        }
+
+        /// <summary>构造一个「AI 服务商」子菜单项，Tag 保存服务商编号。</summary>
+        private System.Windows.Forms.ToolStripMenuItem MakeProviderItem(string text, int provider)
+        {
+            var item = new System.Windows.Forms.ToolStripMenuItem();
+            item.Text = text;
+            item.Tag = provider;
+            item.Checked = (Model.Ai.AiConfig.Provider == provider);
+            item.Click += new EventHandler(AiProvider_Click);
+            return item;
+        }
+
+        /// <summary>切换 AI 服务商：套用预设端点与模型；自定义服务商则逐个询问地址与模型名。</summary>
+        private void AiProvider_Click(object sender, EventArgs e)
+        {
+            var item = sender as System.Windows.Forms.ToolStripMenuItem;
+            if (item == null || item.Tag == null) return;
+            int provider = (int)item.Tag;
+
+            // 必须先切换、再询问：切换会把该服务商上次填过的端点/模型还原出来，
+            // 作为输入框的默认值；顺序颠倒会导致自定义预填上一个服务商的地址
+            Model.Ai.AiConfig.ApplyProvider(provider);
+
+            if (provider == Model.Ai.AiConfig.ProviderCustom)
+            {
+                // 自定义：输入框默认值 = 该服务商上次填过的值，留空或取消即保持不变
+                string url = Microsoft.VisualBasic.Interaction.InputBox(
+                    "接口地址（OpenAI 兼容，结尾的 /v1 要带上）：", "AI 服务商 - 自定义", Model.Ai.AiConfig.BaseUrl);
+                if (!string.IsNullOrWhiteSpace(url)) Model.Ai.AiConfig.BaseUrl = url.Trim();
+                string fast = Microsoft.VisualBasic.Interaction.InputBox(
+                    "快速模型名（默认用它，要求响应快）：", "AI 服务商 - 自定义", Model.Ai.AiConfig.Model);
+                if (!string.IsNullOrWhiteSpace(fast)) Model.Ai.AiConfig.Model = fast.Trim();
+                string reasoning = Microsoft.VisualBasic.Interaction.InputBox(
+                    "推理模型名（勾选「AI短文用推理模型」时用它）：", "AI 服务商 - 自定义", Model.Ai.AiConfig.ReasonModel);
+                if (!string.IsNullOrWhiteSpace(reasoning)) Model.Ai.AiConfig.ReasonModel = reasoning.Trim();
+                Model.Ai.AiConfig.Save();
+            }
+
+            // 勾选态与菜单文字同步
+            foreach (System.Windows.Forms.ToolStripItem drop in SetAiProvider.DropDownItems)
+            {
+                var mi = drop as System.Windows.Forms.ToolStripMenuItem;
+                if (mi != null && mi.Tag != null) mi.Checked = ((int)mi.Tag == provider);
+            }
+            SetAiProvider.Text = "AI 服务商（" + Model.Ai.AiConfig.ProviderName + "）";
+            SetAiKey.Text = "设置 " + Model.Ai.AiConfig.ProviderName + " Key";
+            RefreshAiModelMenuText();
+
+            if (string.IsNullOrWhiteSpace(Model.Ai.AiConfig.ApiKey))
+            {
+                // 该服务商还没存过 Key，直接引导输入
+                if (PromptAiKey())
+                    NotificationForm.ShowMessage("ToastFish", Model.Ai.AiConfig.ProviderName + " API Key 已保存");
+                return;
+            }
+            NotificationForm.ShowMessage("ToastFish", "AI 服务商已切换为：" + Model.Ai.AiConfig.ProviderName
+                + "\n模型：" + Model.Ai.AiConfig.Model);
+        }
+
+        /// <summary>弹输入框设置当前服务商的 API Key，成功保存返回 true</summary>
         private bool PromptAiKey()
         {
+            string hint;
+            switch (Model.Ai.AiConfig.Provider)
+            {
+                case Model.Ai.AiConfig.ProviderKimi:
+                    hint = "请输入 Kimi 开放平台 API Key：\n获取地址：https://platform.kimi.com/console/api-keys";
+                    break;
+                case Model.Ai.AiConfig.ProviderKimiCode:
+                    hint = "请输入 Kimi Code 订阅 API Key：\n获取地址：https://www.kimi.com/code/console\n（订阅 Key 与开放平台 Key 不通用，混用会 401）";
+                    break;
+                case Model.Ai.AiConfig.ProviderCustom:
+                    hint = "请输入自定义服务商的 API Key：\n（接口地址与模型名由「AI 服务商」菜单设置）";
+                    break;
+                default:
+                    hint = "请输入 DeepSeek API Key（sk- 开头）：\n获取地址：https://platform.deepseek.com";
+                    break;
+            }
             string input = Microsoft.VisualBasic.Interaction.InputBox(
-                "请输入 DeepSeek API Key（sk- 开头）：\n获取地址：https://platform.deepseek.com",
-                "ToastFish - AI 短文设置", Model.Ai.AiConfig.ApiKey);
+                hint, "ToastFish - AI 短文设置", Model.Ai.AiConfig.ApiKey);
             if (string.IsNullOrWhiteSpace(input))
                 return false;
             Model.Ai.AiConfig.ApiKey = input.Trim();

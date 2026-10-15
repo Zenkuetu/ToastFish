@@ -10,17 +10,112 @@ namespace ToastFish.Model.Ai
 {
     /// <summary>
     /// AI 短文配置。存储于 Resources\ai_config.txt（key=value 格式，明文）。
+    /// provider: 0=DeepSeek（默认）, 1=Kimi（月之暗面开放平台）, 2=自定义（任意 OpenAI 兼容端点）,
+    ///           3=Kimi Code 订阅（www.kimi.com/code，与开放平台是两套 Key，不通用）
     /// readingMode: 0=例句串读（默认）, 1=AI短文
     /// modelMode: 0=快速（flash，秒级）, 1=推理（pro 深度思考，约1~2分钟，质量更高）
     /// </summary>
     public static class AiConfig
     {
+        public const int ProviderDeepSeek = 0;
+        public const int ProviderKimi = 1;
+        public const int ProviderCustom = 2;
+        public const int ProviderKimiCode = 3;
+
+        public static int Provider = ProviderDeepSeek;
         public static int ReadingMode = 0;
         public static int ModelMode = 0;
         public static string ApiKey = "";
         public static string BaseUrl = "https://api.deepseek.com";
         public static string Model = "deepseek-v4-flash";
         public static string ReasonModel = "deepseek-v4-pro";
+
+        /// <summary>各服务商独立保存的 Key（键 = provider 编号），切换服务商时自动换用，互不覆盖。</summary>
+        private static readonly Dictionary<int, string> _providerKeys = new Dictionary<int, string>();
+
+        /// <summary>各服务商独立保存的模型名（键 = provider 编号）。预设只是首次进入时的默认值，用户改过就以用户值为准。</summary>
+        private static readonly Dictionary<int, string> _providerModels = new Dictionary<int, string>();
+        private static readonly Dictionary<int, string> _providerReasonModels = new Dictionary<int, string>();
+
+        /// <summary>自定义服务商的端点与模型名（兼容旧配置；新配置改用 _providerModels 按服务商记忆）。</summary>
+        private static string[] _customEndpoint = null;
+
+        /// <summary>服务商预设：{ 接口地址, 快速模型, 推理模型 }。自定义服务商返回 null，保留用户手填值。</summary>
+        public static string[] ProviderPreset(int provider)
+        {
+            switch (provider)
+            {
+                case ProviderDeepSeek:
+                    return new[] { "https://api.deepseek.com", "deepseek-v4-flash", "deepseek-v4-pro" };
+                // Kimi（月之暗面）：OpenAI 兼容端点。注意 Key 与端点必须同平台——platform.kimi.com 的 Key 配 api.moonshot.cn，
+                // platform.kimi.ai 的 Key 配 api.moonshot.ai，混用会被 401 拒绝。
+                case ProviderKimi:
+                    return new[] { "https://api.moonshot.cn/v1", "kimi-k2.6", "kimi-k3" };
+                // Kimi Code 订阅：与开放平台是两套 API，Key 不通用（混用 401），Key 在 www.kimi.com/code/console 创建。
+                // 快速用 kimi-for-coding（K2.8 Preview，1M 上下文），推理用 k3-256k（K3 的 256K 版，Plus 及以上可用）。
+                case ProviderKimiCode:
+                    return new[] { "https://api.kimi.com/coding/v1", "kimi-for-coding", "k3-256k" };
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>切换服务商：记住当前 Key、换用目标服务商已存的 Key、套用预设的接口地址与模型（自定义除外），并立即落盘。</summary>
+        public static void ApplyProvider(int provider)
+        {
+            if (provider != Provider)
+            {
+                if (ApiKey != "") _providerKeys[Provider] = ApiKey;
+                // 模型名是按服务商记忆的，离开前先记住
+                _providerModels[Provider] = Model;
+                _providerReasonModels[Provider] = ReasonModel;
+                // 自定义服务商的端点/模型是手填的，离开前必须先记住，否则切走再切回会串成上一个服务商的值
+                if (Provider == ProviderCustom)
+                    _customEndpoint = new[] { BaseUrl, Model, ReasonModel };
+                ApiKey = _providerKeys.ContainsKey(provider) ? _providerKeys[provider] : "";
+            }
+            Provider = provider;
+            string[] preset = ProviderPreset(provider);
+            if (preset != null)
+            {
+                BaseUrl = preset[0];
+                Model = preset[1];
+                ReasonModel = preset[2];
+            }
+            else if (_customEndpoint != null)
+            {
+                // 回到自定义：还原上次手填的端点与模型
+                BaseUrl = _customEndpoint[0];
+                Model = _customEndpoint[1];
+                ReasonModel = _customEndpoint[2];
+            }
+            // 预设只是首次进入该服务商的默认值：用户改过模型名就以用户值为准
+            string savedModel, savedReason;
+            if (_providerModels.TryGetValue(provider, out savedModel) && !string.IsNullOrEmpty(savedModel))
+                Model = savedModel;
+            if (_providerReasonModels.TryGetValue(provider, out savedReason) && !string.IsNullOrEmpty(savedReason))
+                ReasonModel = savedReason;
+            Save();
+        }
+
+        /// <summary>服务商显示名，用于菜单与提示文案。</summary>
+        public static string ProviderName
+        {
+            get
+            {
+                switch (Provider)
+                {
+                    case ProviderKimi: return "Kimi";
+                    case ProviderKimiCode: return "Kimi Code 订阅";
+                    case ProviderCustom: return "自定义";
+                    default: return "DeepSeek";
+                }
+            }
+        }
+
+        private static string _customUrl = null;
+        private static string _customModel = null;
+        private static string _customReasonModel = null;
 
         private static bool _loaded = false;
 
@@ -48,14 +143,50 @@ namespace ToastFish.Model.Ai
                     string v = line.Substring(eq + 1).Trim();
                     switch (k)
                     {
+                        case "provider": int.TryParse(v, out Provider); break;
                         case "readingMode": int.TryParse(v, out ReadingMode); break;
                         case "modelMode": int.TryParse(v, out ModelMode); break;
                         case "apiKey": ApiKey = v; break;
                         case "baseUrl": if (v != "") BaseUrl = v; break;
                         case "model": if (v != "") Model = v; break;
                         case "reasonModel": if (v != "") ReasonModel = v; break;
+                        case "customBaseUrl": _customUrl = v; break;
+                        case "customModel": _customModel = v; break;
+                        case "customReasonModel": _customReasonModel = v; break;
+                        default:
+                            // apiKey.1=xxx / model.1=xxx / reasonModel.1=xxx 形式：某个服务商专用值
+                            if (k.StartsWith("apiKey.", StringComparison.Ordinal))
+                            {
+                                int pid;
+                                if (int.TryParse(k.Substring("apiKey.".Length), out pid)) _providerKeys[pid] = v;
+                            }
+                            else if (k.StartsWith("model.", StringComparison.Ordinal))
+                            {
+                                int pid;
+                                if (int.TryParse(k.Substring("model.".Length), out pid)) _providerModels[pid] = v;
+                            }
+                            else if (k.StartsWith("reasonModel.", StringComparison.Ordinal))
+                            {
+                                int pid;
+                                if (int.TryParse(k.Substring("reasonModel.".Length), out pid)) _providerReasonModels[pid] = v;
+                            }
+                            break;
                     }
                 }
+                // apiKey 存的是当前服务商的 Key，回填到按服务商分组的表里
+                if (ApiKey != "") _providerKeys[Provider] = ApiKey;
+                else if (_providerKeys.ContainsKey(Provider)) ApiKey = _providerKeys[Provider];
+                // 当前服务商的模型名也记入按服务商分组的表，这样立刻切走再切回能还原
+                _providerModels[Provider] = Model;
+                _providerReasonModels[Provider] = ReasonModel;
+                // 自定义服务商手填的端点/模型（三个键任一存在即视为有效）
+                if (_customUrl != null || _customModel != null || _customReasonModel != null)
+                    _customEndpoint = new[] { _customUrl ?? "", _customModel ?? "", _customReasonModel ?? "" };
+                // 兼容旧配置：自定义服务商的模型名曾存在 customModel / customReasonModel 两个键里
+                if (_customModel != null && !_providerModels.ContainsKey(ProviderCustom))
+                    _providerModels[ProviderCustom] = _customModel;
+                if (_customReasonModel != null && !_providerReasonModels.ContainsKey(ProviderCustom))
+                    _providerReasonModels[ProviderCustom] = _customReasonModel;
             }
             catch { /* 配置损坏时使用默认值 */ }
         }
@@ -64,13 +195,38 @@ namespace ToastFish.Model.Ai
         {
             try
             {
+                if (ApiKey != "") _providerKeys[Provider] = ApiKey;
+                // 当前服务商的模型名落盘（用户改过就记住，切换时优先于预设）
+                _providerModels[Provider] = Model;
+                _providerReasonModels[Provider] = ReasonModel;
+                // 正停留在自定义服务商时，把当前端点/模型记为「自定义专用」，避免切换后被覆盖
+                if (Provider == ProviderCustom) _customEndpoint = new[] { BaseUrl, Model, ReasonModel };
                 var sb = new StringBuilder();
+                sb.AppendLine("provider=" + Provider);
                 sb.AppendLine("readingMode=" + ReadingMode);
                 sb.AppendLine("modelMode=" + ModelMode);
                 sb.AppendLine("apiKey=" + ApiKey);
                 sb.AppendLine("baseUrl=" + BaseUrl);
                 sb.AppendLine("model=" + Model);
                 sb.AppendLine("reasonModel=" + ReasonModel);
+                foreach (var kv in _providerKeys)
+                {
+                    if (kv.Value != "") sb.AppendLine("apiKey." + kv.Key + "=" + kv.Value);
+                }
+                if (_customEndpoint != null)
+                {
+                    sb.AppendLine("customBaseUrl=" + _customEndpoint[0]);
+                    sb.AppendLine("customModel=" + _customEndpoint[1]);
+                    sb.AppendLine("customReasonModel=" + _customEndpoint[2]);
+                }
+                foreach (var kv in _providerModels)
+                {
+                    if (!string.IsNullOrEmpty(kv.Value)) sb.AppendLine("model." + kv.Key + "=" + kv.Value);
+                }
+                foreach (var kv in _providerReasonModels)
+                {
+                    if (!string.IsNullOrEmpty(kv.Value)) sb.AppendLine("reasonModel." + kv.Key + "=" + kv.Value);
+                }
                 File.WriteAllText(ConfigPath, sb.ToString(), Encoding.UTF8);
             }
             catch { }
@@ -681,20 +837,82 @@ namespace ToastFish.Model.Ai
 
         // ===== 多轮自检生成辅助方法（2026-08-08）=====
 
-        /// <summary>构造一次 /chat/completions 请求体。reason=true 用推理模型（stream + 16000）；否则快速模型（json_object + thinking disabled + maxTokens）。</summary>
+        /// <summary>需要用顶层 reasoning_effort 控制思考强度、不接受 thinking 字段的 Kimi 模型：
+        /// 开放平台 kimi-k3；Kimi Code 订阅的 k3 / k3-256k 与 kimi-for-coding（K2.8 Preview）。
+        /// kimi-for-coding-highspeed 是 K2.7 Code 高速版，不走这里。</summary>
+        private static bool IsKimiEffort(string model)
+        {
+            if (string.IsNullOrEmpty(model)) return false;
+            return model.StartsWith("kimi-k3", StringComparison.OrdinalIgnoreCase)
+                || model.StartsWith("k3", StringComparison.OrdinalIgnoreCase)
+                || (model.StartsWith("kimi-for-coding", StringComparison.OrdinalIgnoreCase)
+                    && !model.StartsWith("kimi-for-coding-highspeed", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>思考始终开启且不可关闭的 Kimi 模型（传 thinking.type=disabled 会被服务端拒绝）：
+        /// 开放平台 kimi-k2.7-code；Kimi Code 订阅的 kimi-for-coding-highspeed。</summary>
+        private static bool IsKimiAlwaysThink(string model)
+        {
+            if (string.IsNullOrEmpty(model)) return false;
+            return model.StartsWith("kimi-k2.7-code", StringComparison.OrdinalIgnoreCase)
+                || model.StartsWith("kimi-for-coding-highspeed", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 构造一次 /chat/completions 请求体。
+        /// reason=true 用推理模型（stream + 32000 输出）；否则快速模型（json_object 强制 JSON + 关闭思考 + maxTokens）。
+        /// 各服务商参数有差异，故按 AiConfig.Provider 分别拼装：
+        ///   DeepSeek（0）—— thinking / temperature / max_tokens 均支持，保持原始行为不变。
+        ///   Kimi（1/3）  —— max_tokens 已弃用（改用 max_completion_tokens）、temperature 未文档化故不发；
+        ///                   k3 / kimi-for-coding 用 reasoning_effort=high，k2.7-code / highspeed 不可关闭思考，
+        ///                   其余模型用 thinking.type 开关。（3 = Kimi Code 订阅，同协议不同端点与 Key）
+        ///   自定义（2）  —— 只发 OpenAI 标准字段，不猜测厂商扩展参数。
+        /// </summary>
         private static string BuildBody(string sysPrompt, string userContent, bool reason, int maxTokens)
         {
+            bool kimi = AiConfig.Provider == AiConfig.ProviderKimi
+                || AiConfig.Provider == AiConfig.ProviderKimiCode;
+            bool custom = AiConfig.Provider == AiConfig.ProviderCustom;
+            string model = reason ? AiConfig.ReasonModel : AiConfig.Model;
+            int limit = reason ? 32000 : maxTokens;
+
+            var sb = new StringBuilder();
+            sb.Append("{\"model\":\"").Append(JsonEscape(model)).Append("\",");
+            sb.Append("\"messages\":[{\"role\":\"system\",\"content\":\"").Append(JsonEscape(sysPrompt)).Append("\"},");
+            sb.Append("{\"role\":\"user\",\"content\":\"").Append(JsonEscape(userContent)).Append("\"}],");
+
             if (reason)
-                return "{\"model\":\"" + JsonEscape(AiConfig.ReasonModel) + "\"," +
-                    "\"messages\":[{\"role\":\"system\",\"content\":\"" + JsonEscape(sysPrompt) + "\"}," +
-                    "{\"role\":\"user\",\"content\":\"" + JsonEscape(userContent) + "\"}]," +
-                    "\"stream\":true,\"max_tokens\":32000}";
-            return "{\"model\":\"" + JsonEscape(AiConfig.Model) + "\"," +
-                "\"messages\":[{\"role\":\"system\",\"content\":\"" + JsonEscape(sysPrompt) + "\"}," +
-                "{\"role\":\"user\",\"content\":\"" + JsonEscape(userContent) + "\"}]," +
-                "\"response_format\":{\"type\":\"json_object\"}," +
-                "\"thinking\":{\"type\":\"disabled\"}," +
-                "\"temperature\":0.7,\"max_tokens\":" + maxTokens + "}";
+            {
+                sb.Append("\"stream\":true,");
+                if (kimi)
+                {
+                    if (IsKimiEffort(model))
+                        sb.Append("\"reasoning_effort\":\"high\",");
+                    else if (!IsKimiAlwaysThink(model))
+                        sb.Append("\"thinking\":{\"type\":\"enabled\"},");
+                }
+            }
+            else
+            {
+                sb.Append("\"response_format\":{\"type\":\"json_object\"},");
+                if (kimi)
+                {
+                    if (!IsKimiAlwaysThink(model))
+                        sb.Append("\"thinking\":{\"type\":\"disabled\"},");
+                }
+                else if (custom)
+                {
+                    sb.Append("\"temperature\":0.7,");
+                }
+                else
+                {
+                    sb.Append("\"thinking\":{\"type\":\"disabled\"},");
+                    sb.Append("\"temperature\":0.7,");
+                }
+            }
+
+            sb.Append(kimi ? "\"max_completion_tokens\":" : "\"max_tokens\":").Append(limit).Append("}");
+            return sb.ToString();
         }
 
         /// <summary>发送一次 chat/completions 并读回原始响应文本。reason=true 走 SSE 流式（更新 LiveThinking）；false 非流式整读。返回 false 时 error 含原因。</summary>

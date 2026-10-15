@@ -1,6 +1,6 @@
 # ToastFish
 
-> **当前版本：v3.3.0** —— 历史版本与更新说明见 [Releases](https://github.com/Zenkuetu/ToastFish/releases)。
+> **当前版本：v3.3.1** —— 历史版本与更新说明见 [Releases](https://github.com/Zenkuetu/ToastFish/releases)。
 
 > 一款让你**随时随地、被动地**学习英语 / 日语的 Windows 背单词工具。
 >
@@ -31,7 +31,7 @@
 
 ## 安装（Windows 10 / 11）
 
-1. 到 [Releases](https://github.com/Zenkuetu/ToastFish/releases/latest) 下载最新的安装包（`ToastFish-v3.3.0-Setup.exe`）。
+1. 到 [Releases](https://github.com/Zenkuetu/ToastFish/releases/latest) 下载最新的安装包（`ToastFish-v3.3.1-Setup.exe`）。
 2. 双击运行。**无需管理员权限**，默认安装到 `%LOCALAPPDATA%\ToastFish`。
 3. 从开始菜单（或桌面快捷方式）启动，程序会最小化到系统托盘。
 
@@ -103,6 +103,8 @@
 **学后阅读**：刚学的单词会组成例句串读或 AI 短文，目标词橙色高亮；阅读时点击任意英文单词即可查有道词典（悬停变手型）。
 
 **惊喜复习**：平时用电脑时，键盘 / 鼠标 / 手柄操作有 0.5% 概率弹出一个迷你测验，答对巩固记忆，不会打断当前学习。
+
+**AI 短文（可选）**：托盘「参数设置 → 学后AI短文」勾选后启用。默认走 DeepSeek，也可在「参数设置 → AI 服务商」切换为 **Kimi 开放平台**、**Kimi Code 订阅** 或任意 **OpenAI 兼容**端点（自填接口地址与模型名）；各服务商的 Key 与模型名分别保存、互不覆盖，模型名还可在「参数设置 → 设置 AI 模型名」单独修改。不填 Key 时自动回退为离线的例句串读，不影响使用。
 
 ---
 
