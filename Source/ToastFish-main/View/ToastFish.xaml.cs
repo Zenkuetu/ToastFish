@@ -65,6 +65,9 @@ namespace ToastFish
             // 启动惊喜复习后台监控
             SurpriseReviewManager.Start();
 
+            // 启动后延迟静默检查 GitHub 更新：有新版才弹窗，其余情况完全静默（2026-10-15 新增）
+            StartUpdateCheck(false);
+
             //this.WindowState = (WindowState)FormWindowState.Minimized;
         }
 
@@ -171,6 +174,10 @@ namespace ToastFish
         System.Windows.Forms.ToolStripMenuItem SetAiFastModel = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SetAiReasonModel = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SetTestMode = new System.Windows.Forms.ToolStripMenuItem();
+        System.Windows.Forms.ToolStripMenuItem CheckUpdate = new System.Windows.Forms.ToolStripMenuItem();
+
+        // 更新检查：启动后延迟多久开始静默检查 GitHub（毫秒）
+        private const int UPDATE_CHECK_DELAY_MS = 15000;
         private new void ContextMenu()
         {
             ContextMenuStrip Cms = new ContextMenuStrip();
@@ -243,6 +250,9 @@ namespace ToastFish
             SelectJpBook.Text = "日语词汇";
 
             RandomTest.Text = "随机测试";
+
+            CheckUpdate.Text = "检查更新";
+            CheckUpdate.Click += new EventHandler(CheckUpdate_Click);
 
             GotoHtml.Text = "使用说明";
             GotoHtml.Click += new EventHandler(HowToUse_Click);
@@ -409,7 +419,58 @@ namespace ToastFish
             ((ToolStripDropDownItem)Cms.Items[6]).DropDownItems.Add(Shortcuts);
             ((ToolStripDropDownItem)Cms.Items[6]).DropDownItems.Add(Use);
             ((ToolStripDropDownItem)Cms.Items[6]).DropDownItems.Add(Site);
-            ((ToolStripDropDownItem)Cms.Items[6]).DropDownItems.Add(Pdf);            
+            ((ToolStripDropDownItem)Cms.Items[6]).DropDownItems.Add(Pdf);
+            ((ToolStripDropDownItem)Cms.Items[6]).DropDownItems.Add(CheckUpdate);            
+        }
+
+        // ───────────── 更新检查（2026-10-15 新增）─────────────
+
+        /// <summary>托盘「检查更新」：手动检查，无更新或检查失败时给一次性提示</summary>
+        private void CheckUpdate_Click(object sender, EventArgs e)
+        {
+            StartUpdateCheck(true);
+        }
+
+        /// <summary>
+        /// 检查 GitHub 是否有新版本。
+        /// manual=false：启动后延迟 15 秒静默检查，无更新 / 检查失败 / 正在学习或已有弹窗时什么都不做；
+        /// manual=true：用户点「检查更新」，无更新或失败时给一次性提示。
+        /// 任何异常都在此吞掉——更新检查绝不能干扰学习主流程。
+        /// </summary>
+        private void StartUpdateCheck(bool manual)
+        {
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    if (!manual) Thread.Sleep(UPDATE_CHECK_DELAY_MS);
+
+                    Model.UpdateChecker.UpdateInfo info = Model.UpdateChecker.FetchLatest();
+                    if (info == null)
+                    {
+                        if (manual) NotificationForm.ShowMessage("检查更新", "检查失败，请稍后再试");
+                        return;
+                    }
+                    if (!Model.UpdateChecker.IsNewer(info))
+                    {
+                        if (manual) NotificationForm.ShowMessage("检查更新",
+                            "当前已是最新版本 v" + Model.UpdateChecker.CurrentVersionString);
+                        return;
+                    }
+
+                    // 自动检查时避开学习进行中 / 已有弹窗，避免抢屏或误关当前弹窗
+                    if (!manual && (PushWords.IsLearningActive || NotificationForm.Current != null)) return;
+
+                    var task = NotificationForm.ShowWithButtons("检查更新",
+                        "发现新版本 " + info.Tag + "（当前 v" + Model.UpdateChecker.CurrentVersionString + "），是否前往下载？",
+                        new[] { "前往下载", "稍后再说" }, 30000);
+                    if (task.Wait(35000) && task.Result == 0)
+                    {
+                        try { Process.Start(info.Url); } catch { }
+                    }
+                }
+                catch { }
+            });
         }
 
         private void Begin_Click(object sender, EventArgs e)

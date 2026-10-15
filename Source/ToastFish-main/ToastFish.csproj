@@ -166,6 +166,7 @@
     <Compile Include="Model\WordTables.cs" />
     <Compile Include="Model\PathHelper.cs" />
     <Compile Include="Model\SafeRandom.cs" />
+    <Compile Include="Model\UpdateChecker.cs" />
     <Compile Include="Model\StartWithWindows\HotKey.cs" />
     <Compile Include="Model\StartWithWindows\StartWithWindows.cs" />
     <Compile Include="Resources\IconChika.Designer.cs">
