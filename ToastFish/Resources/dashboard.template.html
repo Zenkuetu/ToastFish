@@ -1253,16 +1253,23 @@ function initNeuralBackground() {
 
       const buildNodes = () => {
         const count = Math.round(Math.min(94, Math.max(44, (W * H) / 24000)))
-        nodes = Array.from({ length: count }, () => ({
-          x: Math.random() * W,
-          y: Math.random() * H,
-          vx: (Math.random() - 0.5) * 0.22,
-          vy: (Math.random() - 0.5) * 0.22,
-          r: 1.1 + Math.random() * 1.5,
-          magenta: Math.random() < 0.26,
-          phase: Math.random() * Math.PI * 2,
-          excite: 0
-        }))
+        nodes = Array.from({ length: count }, () => {
+          // spd = 这颗点自己的速度倍率（0.25x ~ 2.2x）：慢点多、快点少，像不同深度的点
+          const spd = 0.25 + Math.pow(Math.random(), 2.2) * 1.95
+          const ang = Math.random() * Math.PI * 2
+          const v = 0.055 + 0.075 * spd
+          return {
+            x: Math.random() * W,
+            y: Math.random() * H,
+            spd: spd,
+            vx: Math.cos(ang) * v,
+            vy: Math.sin(ang) * v,
+            r: 0.85 + spd * 0.85,
+            magenta: Math.random() < 0.26,
+            phase: Math.random() * Math.PI * 2,
+            excite: 0
+          }
+        })
         pulses = []
       }
 
@@ -1367,7 +1374,7 @@ function initNeuralBackground() {
             const d2 = dx * dx + dy * dy
             if (d2 > LINK * LINK) continue
             const d = Math.sqrt(d2)
-            let al = (1 - d / LINK) * 0.155
+            let al = (1 - d / LINK) * 0.155 * (0.72 + Math.max(a.spd, b.spd) * 0.24)
             const hot = Math.max(a.excite, b.excite)
             if (hot > 0.02) al += (1 - d / LINK) * hot * 0.42
             const mag = a.magenta || b.magenta
@@ -1461,11 +1468,11 @@ function initNeuralBackground() {
           const breathe = 0.75 + 0.25 * Math.sin(t * 1.3 + n.phase)
           const e = n.excite
           const base = n.magenta ? '255, 43, 214' : '0, 240, 255'
-          ctx.fillStyle = 'rgba(' + base + ', ' + (0.10 + e * 0.30).toFixed(3) + ')'
+          ctx.fillStyle = 'rgba(' + base + ', ' + (0.055 + n.spd * 0.05 + e * 0.30).toFixed(3) + ')'
           ctx.beginPath()
           ctx.arc(n.x, n.y, (n.r + 3.4) * (breathe + e * 0.5), 0, Math.PI * 2)
           ctx.fill()
-          ctx.fillStyle = 'rgba(' + base + ', ' + (0.42 + e * 0.55 * breathe).toFixed(3) + ')'
+          ctx.fillStyle = 'rgba(' + base + ', ' + (0.28 + n.spd * 0.17 + e * 0.55 * breathe).toFixed(3) + ')'
           ctx.beginPath()
           ctx.arc(n.x, n.y, n.r * (1 + e * 0.45), 0, Math.PI * 2)
           ctx.fill()
