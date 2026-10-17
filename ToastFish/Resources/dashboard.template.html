@@ -1269,7 +1269,10 @@ function initNeuralBackground() {
             r: 1.0 + spd * 1.5,
             magenta: Math.random() < 0.26,
             phase: Math.random() * Math.PI * 2,
-            excite: 0
+            excite: 0,
+            // 排斥速度（px/帧）：目标速度由光标距离算出，实际速度按帧平滑追随，指针移开后渐渐减到 0
+            pvx: 0,
+            pvy: 0
           }
         })
         pulses = []
@@ -1369,15 +1372,37 @@ function initNeuralBackground() {
 
         // 1b) 指针排斥：光标附近的节点被轻轻推开，推出去就停在那儿 —— 不再弹回原位
         // 用的是「每帧一小步」而不是「偏移量 + 弹簧」，所以指针快速扫过也只是把它们拨开
-        if (!reduced && cur.x > -1000) {
-          for (const n of nodes) {
+        // 速度有惯性：目标速度 = 距离衰减力，实际速度按帧平滑追上去 / 慢慢减下来，
+        // 指针远去时是「由快而慢地滑停」，不是一个急刹
+        for (const n of nodes) {
+          let tx = 0, ty = 0
+          if (!reduced && cur.x > -1000) {
             const dx = n.x - cur.x, dy = n.y - cur.y
             const d = Math.hypot(dx, dy)
-            if (d >= PUSH_R || d < 0.001) continue
-            const f = 1 - d / PUSH_R
-            const step = f * PUSH_STEP
-            n.x += (dx / d) * step
-            n.y += (dy / d) * step
+            if (d < PUSH_R && d > 0.001) {
+              const f = 1 - d / PUSH_R
+              const step = f * PUSH_STEP
+              tx = (dx / d) * step
+              ty = (dy / d) * step
+            }
+          }
+          // 加速比减速快一点：靠近时 0.18 一帧就追上去，离开后 0.12 平滑地滑停（约 0.4 秒）
+          const cur2 = Math.hypot(n.pvx, n.pvy)
+          const tgt = Math.hypot(tx, ty)
+          const ease = tgt > cur2 ? 0.18 : 0.12
+          n.pvx += (tx - n.pvx) * ease
+          n.pvy += (ty - n.pvy) * ease
+          const pv = Math.hypot(n.pvx, n.pvy)
+          if (pv > PUSH_STEP * 1.1) {
+            n.pvx *= (PUSH_STEP * 1.1) / pv
+            n.pvy *= (PUSH_STEP * 1.1) / pv
+          }
+          if (Math.abs(n.pvx) < 0.012 && Math.abs(n.pvy) < 0.012 && tgt === 0) {
+            n.pvx = 0
+            n.pvy = 0
+          } else {
+            n.x += n.pvx
+            n.y += n.pvy
           }
         }
 
