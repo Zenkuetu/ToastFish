@@ -349,28 +349,6 @@ body::after {
   font-style: italic;
 }
 
-/* Stat overlay for forgetting curve */
-.stat-overlay {
-  position: absolute;
-  top: 50%;
-  right: 24px;
-  transform: translateY(-50%);
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 900;
-  color: var(--neon-amber);
-  text-shadow: 0 0 15px var(--neon-amber-dim);
-  text-align: right;
-  pointer-events: none;
-}
-
-.stat-overlay span {
-  display: block;
-  font-size: 11px;
-  color: var(--text-dim);
-  font-weight: 400;
-}
-
 /* ============================================================
    Calendar Heatmap
    ============================================================ */
@@ -1156,99 +1134,111 @@ const PageAcademic = {
         if (!d) return
         try {
 
-        // ── Forgetting Curve ──
+        // ── 复习结果分布（按当前间隔分组，100% 堆叠柱） ──
+        // 旧实现画「正确率随间隔衰减的曲线 + 指数拟合」，但库里只保存每个词最近一次评分，
+        // 且间隔是答对才扩张的，长间隔样本天然高正确率（生存偏差），实测曲线是上升的。
+        // 这里改为如实呈现每一档里评分的构成。
         if (forgettingCurve.value) {
           const ctx = forgettingCurve.value.getContext('2d')
-          const rates = d.forgettingData.map(x => x.rate)
-          const fitted = d.forgettingData.map(x => x.fittedRate)
-          const { a, b } = d.fitParams
+          const rows = d.forgettingData
+          const share = (k) => rows.map(r => r.count ? +(r[k] / r.count * 100).toFixed(1) : 0)
           const c = new Chart(ctx, {
-            type: 'line',
+            type: 'bar',
             data: {
-              labels: d.forgettingData.map(x => x.label),
+              labels: rows.map(x => x.label),
               datasets: [
-                {
-                  label: '实测正确率', data: rates,
-                  borderColor: '#00F0FF', backgroundColor: 'rgba(0, 240, 255, 0.15)',
-                  borderWidth: 2.5, pointRadius: 5, pointBackgroundColor: '#00F0FF',
-                  pointBorderColor: '#0A0A1A', pointBorderWidth: 2, tension: 0.2, showLine: false
-                },
-                {
-                  label: `指数拟合 R(t)=${a.toFixed(2)}·e^(-t/${b.toFixed(0)})  R²=${d.fitParams.r2.toFixed(3)}`,
-                  data: fitted, borderColor: '#FF00FF', borderWidth: 1.5,
-                  borderDash: [6, 3], pointRadius: 0, fill: false, tension: 0.4
-                }
+                { label: 'Again ≤0.5', data: share('again'), backgroundColor: 'rgba(255, 51, 85, 0.75)' },
+                { label: 'Hard 0.7', data: share('hard'), backgroundColor: 'rgba(255, 200, 60, 0.75)' },
+                { label: 'Good 0.8', data: share('good'), backgroundColor: 'rgba(0, 240, 255, 0.6)' },
+                { label: 'Easy 1.0', data: share('easy'), backgroundColor: 'rgba(0, 255, 136, 0.6)' }
               ]
             },
             options: {
               responsive: true, maintainAspectRatio: false,
               plugins: {
-                legend: { position: 'bottom', labels: { usePointStyle: true, color: '#9090B0', font: {size: 10} } },
-                tooltip: { callbacks: { label: ctx => ctx.dataset.label.includes('实测') ? `正确率: ${ctx.raw}%` : `拟合值: ${ctx.raw.toFixed(1)}%` } }
+                legend: { position: 'bottom', labels: { usePointStyle: true, color: '#9090B0', font: {size: 10}, boxWidth: 8 } },
+                tooltip: { callbacks: {
+                  label: (ctx) => {
+                    const key = ['again', 'hard', 'good', 'easy'][ctx.datasetIndex]
+                    const r = rows[ctx.dataIndex]
+                    return ctx.dataset.label + ': ' + r[key] + ' 词 (' + ctx.raw + '%)'
+                  },
+                  footer: (items) => {
+                    const r = rows[items[0].dataIndex]
+                    return '该档共 ' + r.count + ' 词 · 通过率 ' + (r.passRate === null ? '—' : r.passRate + '%')
+                  }
+                } }
               },
               scales: {
-                y: { min: 0, max: 105, ticks: { color: '#6060A0', callback: v => v + '%' } },
-                x: { ticks: { color: '#6060A0' } }
+                x: { stacked: true, ticks: { color: '#6060A0',
+                     callback: (v, i) => rows[i].label + ' · ' + rows[i].count } },
+                y: { stacked: true, min: 0, max: 100, ticks: { color: '#6060A0', callback: v => v + '%' } }
               }
             }
           }); charts.push(c)
         }
 
-        // ── Bjork Scatter ──
+        // ── Bjork 散点：复习间隔 × 最近一次评分 ──
         if (bjorkScatter.value) {
           const ctx = bjorkScatter.value.getContext('2d')
           const pts = d.bjorkPoints
-          const colors = pts.map(p => p.status === 5 ? 'rgba(0, 240, 255, 0.6)' : 'rgba(255, 0, 255, 0.7)')
+          const mk = (arr) => arr.map(p => ({ x: p.interval, y: p.score, word: p.word, difficulty: p.difficulty }))
           const c = new Chart(ctx, {
             type: 'scatter',
             data: {
               datasets: [
-                { label: '已掌握', data: pts.filter(p => p.status === 5).map(p => ({x: p.storage, y: p.retrieval, word: p.word, storage: p.storage, retrieval: p.retrieval})),
-                   backgroundColor: 'rgba(0, 240, 255, 0.5)', pointRadius: 3 },
-                { label: '学习中', data: pts.filter(p => p.status !== 5).map(p => ({x: p.storage, y: p.retrieval, word: p.word, storage: p.storage, retrieval: p.retrieval})),
-                   backgroundColor: 'rgba(255, 0, 255, 0.7)', pointRadius: 4 }
+                { label: '已学完', data: mk(pts.filter(p => p.status === 5)), backgroundColor: 'rgba(0, 240, 255, 0.45)', pointRadius: 3 },
+                { label: '学习中 / 重学', data: mk(pts.filter(p => p.status !== 5)), backgroundColor: 'rgba(255, 0, 255, 0.6)', pointRadius: 4 }
               ]
             },
             options: {
               responsive: true, maintainAspectRatio: false,
               plugins: {
                 legend: { position: 'bottom', labels: { usePointStyle: true, color: '#9090B0' } },
-                tooltip: { callbacks: { label: ctx => {
-                  const raw = ctx.raw
-                  return raw ? `${raw.word}: S=${raw.storage} τ=${raw.retrieval}` : ''
+                tooltip: { callbacks: { label: (ctx) => {
+                  const r = ctx.raw
+                  return r.word + ': 间隔 ' + r.x + ' 天 · 评分 ' + r.y + ' · D=' + r.difficulty
                 } } }
               },
               scales: {
-                x: { title: { display: true, text: '存储强度 S (代理)', color: '#6060A0' }, ticks: { color: '#6060A0' } },
-                y: { title: { display: true, text: '提取强度 τ (lastScore)', color: '#6060A0' }, min: 0, max: 1.1, ticks: { color: '#6060A0' } }
+                x: { type: 'logarithmic',
+                     title: { display: true, text: '当前复习间隔（天，对数轴）', color: '#6060A0' },
+                     ticks: { color: '#6060A0', maxRotation: 0, autoSkip: true,
+                              callback: v => (v === 1 || v === 3 || v === 10 || v === 30 || v === 100 || v === 300) ? v + '天' : '' } },
+                y: { title: { display: true, text: '最近一次评分', color: '#6060A0' }, min: 0, max: 1.05, ticks: { color: '#6060A0' } }
               }
             }
           }); charts.push(c)
         }
 
-        // ── Expansion Curve ──
+        // ── 间隔扩张曲线（按难度档） ──
         if (expansionCurve.value) {
           const ctx = expansionCurve.value.getContext('2d')
           const c = new Chart(ctx, {
             type: 'bar',
             data: {
               labels: d.expansionCurve.map(x => x.label),
-              datasets: [{
-                label: '平均间隔(天)', data: d.expansionCurve.map(x => x.avgInterval),
-                backgroundColor: d.expansionCurve.map((_, i) =>
-                  `rgba(0, 240, 255, ${0.3 + i * 0.2})`)
-              }]
+              datasets: [
+                { label: '平均间隔(天)', data: d.expansionCurve.map(x => x.avgInterval), backgroundColor: 'rgba(0, 240, 255, 0.38)' },
+                { label: '中位间隔(天)', data: d.expansionCurve.map(x => x.medianInterval), backgroundColor: 'rgba(255, 0, 255, 0.35)' }
+              ]
             },
             options: {
               responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: { y: { ticks: { color: '#6060A0', callback: v => v + '天' } },
+              plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: (ctx) => {
+                  const r = d.expansionCurve[ctx.dataIndex]
+                  return ctx.dataset.label + ': ' + ctx.raw + ' 天（' + r.count + ' 词）'
+                } } }
+              },
+              scales: { y: { beginAtZero: true, ticks: { color: '#6060A0', callback: v => v + '天' } },
                         x: { ticks: { color: '#6060A0' } } }
             }
           }); charts.push(c)
         }
 
-        // ── Difficulty Zone ──
+        // ── 难度分布 ──
         if (diffZone.value) {
           const ctx = diffZone.value.getContext('2d')
           const c = new Chart(ctx, {
@@ -1257,22 +1247,20 @@ const PageAcademic = {
               labels: d.diffBucketsDetailed.map(x => x.label),
               datasets: [{
                 label: '词数', data: d.diffBucketsDetailed.map(x => x.count),
-                backgroundColor: d.diffBucketsDetailed.map(x => {
-                  const mid = (x.lo + x.hi) / 2
-                  return mid >= 0.15 && mid < 0.35 ? 'rgba(255, 0, 255, 0.6)' : 'rgba(0, 240, 255, 0.3)'
-                }),
+                backgroundColor: d.diffBucketsDetailed.map(x =>
+                  x.desirable ? 'rgba(255, 0, 255, 0.6)' : 'rgba(0, 240, 255, 0.3)'),
                 borderRadius: 2
               }]
             },
             options: {
               responsive: true, maintainAspectRatio: false,
               plugins: { legend: { display: false } },
-              scales: { y: { ticks: { color: '#6060A0' } }, x: { ticks: { color: '#6060A0' } } }
+              scales: { y: { beginAtZero: true, ticks: { color: '#6060A0' } }, x: { ticks: { color: '#6060A0' } } }
             }
           }); charts.push(c)
         }
 
-        // ── Efficiency Index ──
+        // ── 学习效率指数 ──
         if (efficiency.value) {
           const ctx = efficiency.value.getContext('2d')
           const c = new Chart(ctx, {
@@ -1282,13 +1270,19 @@ const PageAcademic = {
               datasets: [{
                 label: '效率指数', data: d.efficiencyTimeline.map(r => r.efficiency),
                 borderColor: '#FFC83C', borderWidth: 2, tension: 0.3,
-                pointRadius: 2, pointBackgroundColor: '#FFC83C', fill: false
+                pointRadius: 2, pointBackgroundColor: '#FFC83C', fill: false, spanGaps: true
               }]
             },
             options: {
               responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: { y: { min: 0, max: 1.1, ticks: { color: '#6060A0' } },
+              plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: (ctx) => {
+                  const r = d.efficiencyTimeline[ctx.dataIndex]
+                  return '效率 ' + Math.round(r.efficiency * 100) + '% · 复习 ' + r.reviewed + ' 词'
+                } } }
+              },
+              scales: { y: { beginAtZero: false, grace: '10%', ticks: { color: '#6060A0', callback: v => Math.round(v * 100) + '%' } },
                         x: { ticks: { color: '#6060A0', maxTicksLimit: 12 } } }
             }
           }); charts.push(c)
@@ -1305,14 +1299,11 @@ const PageAcademic = {
 <div class="page page-academic">
   <!-- Forgetting Curve (full width) -->
   <div class="chart-card full-width" style="margin-bottom:20px;position:relative;">
-    <h3>Ebbinghaus 遗忘曲线 · 指数拟合</h3>
+    <h3>复习结果分布 · 按当前间隔分组</h3>
     <div class="chart-wrap" style="position:relative;">
       <canvas ref="forgettingCurve" height="280"></canvas>
-      <div class="stat-overlay" v-if="d.halfLife > 0">
-        <div>{{d.halfLife}}<span>天</span></div>
-        <span>记忆半衰期 t₁/₂</span>
-      </div>
     </div>
+    <p class="citation">100% 堆叠：每一档间隔里，最近一次评分分别是 Again / Hard / Good / Easy 的比例。数据库只保存每个词「最近一次」的评分，而间隔是答对后才扩张的，所以长间隔档天然偏高（生存偏差）——这张图描述的是复习结果分布，不能用来推算遗忘速率或半衰期。</p>
   </div>
 
   <!-- Bjork + Expansion -->
@@ -1320,12 +1311,12 @@ const PageAcademic = {
     <div class="chart-card">
       <h3>Bjork 双维模型 · 存储 vs 提取强度</h3>
       <div class="chart-wrap"><canvas ref="bjorkScatter" height="280"></canvas></div>
-      <p class="citation">Bjork & Bjork (1992) New Theory of Disuse · 每个点代表一个单词</p>
+      <p class="citation">Bjork & Bjork (1992) New Theory of Disuse · 横轴 = 当前复习间隔(天，对数轴) · 纵轴 = 最近一次评分 · 每个点是一个单词</p>
     </div>
     <div class="chart-card">
       <h3>间隔扩张曲线</h3>
       <div class="chart-wrap"><canvas ref="expansionCurve" height="280"></canvas></div>
-      <p class="citation">横轴 = SM2 学习阶段 · 纵轴 = 平均复习间隔(天)</p>
+      <p class="citation">横轴 = SM2 难度档（0 = 最易，1 = 最难） · 纵轴 = 复习间隔(天) · 难度越低的词间隔被扩张得越长</p>
     </div>
   </section>
 
@@ -1334,12 +1325,12 @@ const PageAcademic = {
     <div class="chart-card">
       <h3>难度分布 · <span style="color:var(--neon-magenta);">合意难度区</span></h3>
       <div class="chart-wrap"><canvas ref="diffZone" height="240"></canvas></div>
-      <p class="citation">Bjork (1994): 最佳学习发生在 difficulty 0.15-0.35 区间</p>
+      <p class="citation">Bjork (1994): 最佳学习发生在 difficulty 0.15-0.35 区间 · 品红柱 = 与合意区有重叠的档位</p>
     </div>
     <div class="chart-card">
       <h3>学习效率指数</h3>
       <div class="chart-wrap"><canvas ref="efficiency" height="240"></canvas></div>
-      <p class="citation">效率 = (Easy+Good)/Total · 接近 1.0 = 最优</p>
+      <p class="citation">效率 = (Easy+Good)/Total · 纵轴自动缩放以便看出波动；接近 100% 说明当天几乎没有 Again/Hard</p>
     </div>
   </section>
 
@@ -1365,7 +1356,7 @@ const PageAcademic = {
       <p class="citation" style="margin-top:8px;">颜色越绿 = 正确率越高 · 红色 = 需关注</p>
     </div>
     <div class="chart-card">
-      <h3>顽固词 Top {{d.hardWords.length}}</h3>
+      <h3>顽固词 Top {{d.hardWords.length}}<span style="font-size:11px;color:var(--text-dim);font-weight:400;"> · 全库 {{d.lapseCount}} / {{d.totalWords}} 词 · {{d.bookCount}} 个词库</span></h3>
       <table class="word-table">
         <thead><tr><th>#</th><th>单词</th><th>释义</th><th>难度</th><th>间隔</th><th>Score</th></tr></thead>
         <tbody>

@@ -57,18 +57,6 @@ def read_all_data(conn):
     counts = {r['bookName']: {'number': r['number'], 'current': r['current']}
               for r in conn.execute('SELECT * FROM Count').fetchall()}
 
-    # 当前词库的已学词 SM2 参数
-    current_book = global_config.get('currentBookName', 'CET6_3')
-    words = []
-    try:
-        words = [dict(r) for r in conn.execute(
-            f'SELECT wordRank, headWord, pos, tranCN, difficulty, daysBetweenReviews, '
-            f'lastScore, status, dateLastReviewed '
-            f'FROM [{current_book}] WHERE status != 0'
-        ).fetchall()]
-    except Exception:
-        pass
-
     # 所有词库的统计
     all_books = [r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
@@ -86,7 +74,58 @@ def read_all_data(conn):
         except Exception:
             pass
 
-    return studylog, global_config, counts, words, book_stats, current_book
+    # 当前词库的已学词 SM2 参数
+    current_book = global_config.get('currentBookName', 'CET6_3')
+    words = []
+    try:
+        words = [dict(r) for r in conn.execute(
+            f'SELECT wordRank, headWord, pos, tranCN, difficulty, daysBetweenReviews, '
+            f'lastScore, status, dateLastReviewed '
+            f'FROM [{current_book}] WHERE status != 0'
+        ).fetchall()]
+    except Exception:
+        pass
+
+    # 全部词库的已学词（按 headWord 去重）—— 学术页跨词库统计用
+    all_words = read_all_learned_words(conn, all_books)
+
+    return studylog, global_config, counts, words, all_words, book_stats, current_book
+
+
+SM2_REQUIRED_COLUMNS = {'headWord', 'difficulty', 'daysBetweenReviews', 'lastScore', 'status'}
+
+
+def read_all_learned_words(conn, tables):
+    """汇总所有词库的已学词，按 headWord 去重。
+
+    学术页原先只看 currentBookName，切换词库后整页数字全变、书与书之间不可比。
+    这里合并全部词库；同一单词被多个词库收录时，保留学习程度更深
+    （status 更高、难度更大）的那一条。
+    """
+    best = {}
+    for t in tables:
+        if t in EXCLUDE_TABLES or t.startswith('_'):
+            continue
+        try:
+            cols = {r[1] for r in conn.execute(f'PRAGMA table_info([{t}])')}
+            if not SM2_REQUIRED_COLUMNS <= cols:
+                continue
+            rank_expr = 'wordRank' if 'wordRank' in cols else '0 AS wordRank'
+            pos_expr = 'pos' if 'pos' in cols else "'' AS pos"
+            tran_expr = 'tranCN' if 'tranCN' in cols else "'' AS tranCN"
+            rows = conn.execute(
+                f'SELECT {rank_expr}, headWord, {pos_expr}, {tran_expr}, difficulty, '
+                f'daysBetweenReviews, lastScore, status FROM [{t}] WHERE status != 0'
+            ).fetchall()
+        except Exception:
+            continue
+        for r in rows:
+            w = dict(r)
+            w['book'] = t
+            cur = best.get(w['headWord'])
+            if cur is None or (w['status'], w['difficulty']) > (cur['status'], cur['difficulty']):
+                best[w['headWord']] = w
+    return list(best.values())
 
 
 def read_essay_logs(conn):
@@ -209,7 +248,11 @@ def compute_page1(studylog, words, counts, book_stats, current_book):
     ]
     diff_hist = []
     for b in diff_buckets:
-        cnt = sum(1 for w in words if b['lo'] <= w['difficulty'] < b['hi'])
+        if b['hi'] >= 1.0:
+            # 末桶闭合，difficulty 恰为 1.0（或越界）也要计入
+            cnt = sum(1 for w in words if w['difficulty'] >= b['lo'])
+        else:
+            cnt = sum(1 for w in words if b['lo'] <= w['difficulty'] < b['hi'])
         diff_hist.append({'label': b['label'], 'count': cnt})
 
     # --- 间隔分布 ---
@@ -224,7 +267,10 @@ def compute_page1(studylog, words, counts, book_stats, current_book):
     ]
     interval_hist = []
     for b in interval_buckets:
-        cnt = sum(1 for w in words if b['lo'] < w['daysBetweenReviews'] <= b['hi'])
+        if b['hi'] >= 9999:
+            cnt = sum(1 for w in words if w['daysBetweenReviews'] >= b['lo'])
+        else:
+            cnt = sum(1 for w in words if b['lo'] <= w['daysBetweenReviews'] < b['hi'])
         interval_hist.append({'label': b['label'], 'count': cnt})
 
     # --- 词库进度排行 ---
@@ -245,7 +291,9 @@ def compute_page1(studylog, words, counts, book_stats, current_book):
     for w in words:
         s = w['status']
         status_dist[s] = status_dist.get(s, 0) + 1
-    status_pie = [{'name': f'Status {k}', 'count': v} for k, v in status_dist.items()]
+    status_names = {1: '学习步 1', 2: '学习步 2', 3: '重学 1', 4: '重学 2', 5: '已学完'}
+    status_pie = [{'name': status_names.get(k, f'Status {k}'), 'count': v}
+                  for k, v in sorted(status_dist.items())]
 
     return {
         'kpis': kpis,
@@ -269,54 +317,53 @@ def compute_page1(studylog, words, counts, book_stats, current_book):
 # ============================================================
 
 def compute_page2(studylog, words):
+    """学术分析页指标。
+
+    words 是「全部词库的已学词」（按 headWord 去重），与当前选中词库无关，
+    避免切换词库后整页数据变样。
+    """
     if not words:
         return _empty_page2()
 
-    # --- 遗忘曲线：按间隔桶计算正确率 ---
+    # --- 复习结果 × 间隔档 ---
+    # 注意：库里只保存每个词"最近一次"的评分，没有逐次复习历史；而间隔是"答对才扩张"，
+    # 所以长间隔样本天然高正确率（生存偏差），真实的 Ebbinghaus 衰减率在这里不可测。
+    # 能如实呈现的是：每个间隔档里最近一次评分的分布。
     forgetting_buckets = [
         ('<1天', 0, 1), ('1-3天', 1, 3), ('3-7天', 3, 7),
-        ('1-2周', 7, 14), ('2-4周', 14, 30), ('1-2月', 30, 60), ('>2月', 60, 9999),
+        ('1-2周', 7, 14), ('2-4周', 14, 30), ('1-2月', 30, 60), ('>2月', 60, float('inf')),
     ]
     forgetting_data = []
     for label, lo, hi in forgetting_buckets:
-        bucket_words = [w for w in words if lo < w['daysBetweenReviews'] <= hi]
-        n = len(bucket_words)
-        # 与 C# 端 SM2+ Parameters.Correct=0.8 一致（2026-07-21 调优），Hard(0.7) 不算正确
-        correct = sum(1 for w in bucket_words if w['lastScore'] >= 0.8)
-        rate = round(correct / n * 100, 1) if n > 0 else 0
+        bucket = [w for w in words if lo <= w['daysBetweenReviews'] < hi]
+        n = len(bucket)
+        again = sum(1 for w in bucket if w['lastScore'] <= 0.5)
+        hard = sum(1 for w in bucket if 0.5 < w['lastScore'] < 0.8)
+        good = sum(1 for w in bucket if w['lastScore'] == 0.8)
+        easy = sum(1 for w in bucket if w['lastScore'] > 0.8)
         forgetting_data.append({
-            'label': label, 'midpoint': (lo + min(hi, 120)) / 2,
-            'count': n, 'rate': rate
+            'label': label, 'count': n,
+            'again': again, 'hard': hard, 'good': good, 'easy': easy,
+            # 与 C# 端 SM2+ Parameters.Correct=0.8 一致：Good / Easy 才算通过
+            'passRate': round((good + easy) / n * 100, 1) if n else None,
+            'failRate': round((again + hard) / n * 100, 1) if n else None,
         })
 
-    # 指数拟合参数（需要在半衰期前计算）
-    fit_params = _exp_fit(forgetting_data)
-
-    # 记忆半衰期估算
-    half_life = _estimate_half_life(forgetting_data, fit_params)
-
-    # 为每个桶计算拟合值
-    a_fit, b_fit = fit_params['a'], fit_params['b']
-    for fd in forgetting_data:
-        fd['fittedRate'] = round(a_fit * math.exp(-fd['midpoint'] / b_fit) * 100, 1) if b_fit > 0 else 0
-
     # --- Bjork 双维模型 ---
+    # 存储强度用 SM2 的复习间隔本身做代理（间隔就是稳定性估计）。
+    # 旧公式 storage = -t / ln(min(score, 0.99)) 在 lastScore=1.0 时等于 99.5·t，
+    # 只要有 2 天间隔就撞上 200 的上限，70% 的点堆成一条竖线。
     bjork_points = []
     for w in words:
-        score = w['lastScore']
         interval = w['daysBetweenReviews']
-        # 存储强度代理 S = -t / ln(R)，R=score 代理
-        if score > 0.1 and interval > 0:
-            s = min(score, 0.99)  # log(1)=0 would divide by zero
-            storage = -interval / math.log(max(s, 0.02))
-        else:
-            storage = 0.5
+        if interval <= 0:
+            continue
         bjork_points.append({
             'word': w['headWord'],
-            'storage': round(min(storage, 200), 1),
-            'retrieval': round(score, 2),
+            'interval': round(interval, 1),
+            'score': round(w['lastScore'], 2),
             'status': w['status'],
-            'difficulty': round(w['difficulty'], 4)
+            'difficulty': round(w['difficulty'], 4),
         })
 
     # --- 难度分布 + 合意区 ---
@@ -325,207 +372,118 @@ def compute_page2(studylog, words):
     for i in range(10):
         lo = round(i * 0.1, 1)
         hi = round((i + 1) * 0.1, 1)
-        cnt = sum(1 for w in words if lo <= w['difficulty'] < hi)
-        diff_buckets_detailed.append({'label': f'{lo:.1f}', 'lo': lo, 'hi': hi, 'count': cnt})
+        if i == 9:
+            # 末桶闭合：difficulty 恰为 1.0（或异常越界）也计入，不能再被静默丢弃
+            cnt = sum(1 for w in words if w['difficulty'] >= lo)
+        else:
+            cnt = sum(1 for w in words if lo <= w['difficulty'] < hi)
+        # 合意区按"桶与 [0.15, 0.35) 有重叠"判定；用桶中点会让 0.3-0.4 桶
+        # （大量词恰好落在 0.3）漏掉高亮，看起来像"我的词都不在合意区"
+        desirable = lo < 0.35 and hi > 0.15
+        diff_buckets_detailed.append({
+            'label': f'{lo:.1f}', 'lo': lo, 'hi': hi, 'count': cnt, 'desirable': desirable
+        })
     desirable_zone = {'lo': 0.15, 'hi': 0.35}
 
     # --- 学习效率指数 ---
     efficiency_timeline = []
-    for i, r in enumerate(studylog):
-        if r['wordsReviewed'] > 0:
-            eff = round((r['scoreEASY'] + r['scoreGOOD']) / r['wordsReviewed'], 3)
-        else:
-            eff = 0
-        efficiency_timeline.append({'date': r['date'], 'efficiency': eff})
+    for r in studylog:
+        reviewed = r['wordsReviewed']
+        eff = round((r['scoreEASY'] + r['scoreGOOD']) / reviewed, 3) if reviewed > 0 else None
+        efficiency_timeline.append({
+            'date': r['date'], 'efficiency': eff, 'reviewed': reviewed
+        })
 
-    # --- 间隔扩张曲线（按 status） ---
-    status_intervals = {}
-    for w in words:
-        s = w['status']
-        if s not in status_intervals:
-            status_intervals[s] = []
-        status_intervals[s].append(w['daysBetweenReviews'])
+    # --- 间隔扩张：按难度档 ---
+    # status 是学习阶段（New/Step1/Step2/Relearn/Reviewed=5），不是掌握程度：
+    # 按 status 分组时，已学完的词库里永远只有一根 Status 5 的柱子。
+    # 改按难度档分组，能看出"难度越低，间隔被扩张得越长"。
+    expansion_buckets = [
+        ('0.0-0.1', 0.0, 0.1), ('0.1-0.2', 0.1, 0.2), ('0.2-0.3', 0.2, 0.3),
+        ('0.3-0.4', 0.3, 0.4), ('0.4-0.5', 0.4, 0.5), ('0.5+', 0.5, float('inf')),
+    ]
     expansion_curve = []
-    for s in sorted(status_intervals.keys()):
-        vals = status_intervals[s]
+    for label, lo, hi in expansion_buckets:
+        vals = sorted(w['daysBetweenReviews'] for w in words if lo <= w['difficulty'] < hi)
+        if not vals:
+            continue
         expansion_curve.append({
-            'status': s,
-            'label': f'Status {s}',
+            'label': label,
             'avgInterval': round(sum(vals) / len(vals), 1),
-            'medianInterval': round(sorted(vals)[len(vals)//2], 1),
-            'count': len(vals)
+            'medianInterval': round(vals[len(vals) // 2], 1),
+            'count': len(vals),
         })
 
     # --- 周节律热力图 ---
     weekday_names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-    # 按周分组
     weekly_data = defaultdict(lambda: [0, 0])  # [correct, total]
+    last_day = None
     for r in studylog:
         dt = datetime.strptime(r['date'], '%Y-%m-%d')
+        if last_day is None or dt > last_day:
+            last_day = dt
         week_key = dt.strftime('%Y-W%W')
         wd = dt.weekday()
-        correct = r['scoreEASY'] + r['scoreGOOD']
-        weekly_data[(week_key, wd)][0] += correct
+        weekly_data[(week_key, wd)][0] += r['scoreEASY'] + r['scoreGOOD']
         weekly_data[(week_key, wd)][1] += r['wordsReviewed']
 
-    # 构建矩阵：取最近 8 周
-    all_weeks = sorted(set(k[0] for k in weekly_data.keys()))
-    recent_weeks = all_weeks[-8:] if len(all_weeks) > 8 else all_weeks
-
     rhythm_matrix = []
-    for week in recent_weeks:
-        row = {'week': week}
-        for wd in range(7):
-            correct, total = weekly_data.get((week, wd), (0, 0))
-            rate = round(correct / total * 100, 1) if total > 0 else None
-            row[weekday_names[wd]] = rate
-        rhythm_matrix.append(row)
+    if last_day is not None:
+        # 以最后一条记录所在周的周一为锚，向前取连续 8 个自然周。
+        # 旧写法 all_weeks[-8:] 取的是"最近 8 个有数据的周"，中间断档时横轴会偷偷跨更久。
+        monday = last_day - timedelta(days=last_day.weekday())
+        for k in range(7, -1, -1):
+            week = (monday - timedelta(days=7 * k)).strftime('%Y-W%W')
+            row = {'week': week}
+            for wd in range(7):
+                correct, total = weekly_data.get((week, wd), (0, 0))
+                row[weekday_names[wd]] = round(correct / total * 100, 1) if total > 0 else None
+            rhythm_matrix.append(row)
 
     # --- 顽固词 Top 15 ---
-    hard_words = sorted(
-        [w for w in words if w['status'] != 5],
-        key=lambda x: x['difficulty'], reverse=True
-    )[:15]
+    # 旧实现按 status != 5 过滤，但本作 status=5 就是 Reviewed（已学完），
+    # 已学词几乎全为 5，榜单恒空。改为"最近一次没通过（< Good）或仍在学习/重学阶段"。
+    lapsed = [w for w in words if w['lastScore'] < 0.8 or w['status'] != 5]
+    hard_words = sorted(lapsed, key=lambda x: (-x['difficulty'], x['daysBetweenReviews']))[:15]
     hard_list = [{
         'word': w['headWord'],
-        'pos': w.get('pos', ''),
-        'tranCN': w.get('tranCN', ''),
+        'pos': w.get('pos') or '',
+        'tranCN': w.get('tranCN') or '',
         'difficulty': round(w['difficulty'], 4),
         'interval': round(w['daysBetweenReviews'], 1),
         'score': round(w['lastScore'], 2),
-        'status': w['status']
+        'status': w['status'],
+        'book': w.get('book', ''),
     } for w in hard_words]
 
     return {
         'forgettingData': forgetting_data,
-        'halfLife': round(half_life, 1),
-        'fitParams': fit_params,
         'bjorkPoints': bjork_points,
         'diffBucketsDetailed': diff_buckets_detailed,
         'desirableZone': desirable_zone,
         'efficiencyTimeline': efficiency_timeline,
         'expansionCurve': expansion_curve,
-        'rhythmMatrix': list(rhythm_matrix),
+        'rhythmMatrix': rhythm_matrix,
         'hardWords': hard_list,
         'weekdayNames': weekday_names,
         'totalWords': len(words),
         'totalStudyDays': len(studylog),
+        'lapseCount': len(lapsed),
+        'bookCount': len({w.get('book', '') for w in words}),
     }
 
 
 def _empty_page2():
     return {
-        'forgettingData': [], 'halfLife': 0, 'fitParams': {'a': 0, 'b': 0, 'r2': 0},
-        'bjorkPoints': [], 'diffBucketsDetailed': [],
+        'forgettingData': [], 'bjorkPoints': [], 'diffBucketsDetailed': [],
         'desirableZone': {'lo': 0.15, 'hi': 0.35},
         'efficiencyTimeline': [], 'expansionCurve': [],
         'rhythmMatrix': [], 'hardWords': [],
         'weekdayNames': ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
-        'totalWords': 0, 'totalStudyDays': 0
+        'totalWords': 0, 'totalStudyDays': 0, 'lapseCount': 0, 'bookCount': 0,
     }
 
 
-def _estimate_half_life(forgetting_data, fit_params):
-    """从遗忘曲线数据中估算记忆半衰期（天）。
-
-    优先使用指数拟合参数: t₁/₂ = b * ln(2)。
-    如果拟合失败，回退到数据分桶插值。"""
-    b = fit_params.get('b', 0)
-
-    # 如果拟合可信（b > 0 且 r² > 0.5），直接按模型计算
-    if b > 0 and fit_params.get('r2', 0) > 0.5:
-        return b * math.log(2)
-
-    # 回退：从原始桶数据插值（仅使用含足够数据的桶）
-    points = [(d['midpoint'], d['rate']) for d in forgetting_data if d['count'] >= 10]
-    if len(points) < 2:
-        points = [(d['midpoint'], d['rate']) for d in forgetting_data if d['count'] > 0]
-
-    if len(points) < 2:
-        return 90.0
-
-    if all(p[1] > 85 for p in points):
-        return max(points[-1][0] * 3, 100.0)
-
-    if all(p[1] > 50 for p in points):
-        return points[-1][0] * 2
-
-    if all(p[1] < 50 for p in points):
-        return points[0][0] * 0.5
-
-    for i in range(len(points) - 1):
-        x1, y1 = points[i]
-        x2, y2 = points[i + 1]
-        if (y1 - 50) * (y2 - 50) <= 0:
-            if abs(y1 - y2) < 0.01:
-                return (x1 + x2) / 2
-            t = (50 - y1) / (y2 - y1)
-            return x1 + t * (x2 - x1)
-    return 90.0
-
-
-def _exp_fit(forgetting_data):
-    """简单指数拟合 R = a * exp(-t/b)，返回参数"""
-    points = [(d['midpoint'], d['rate'] / 100) for d in forgetting_data if d['count'] > 0]
-    if len(points) < 3:
-        return {'a': 1.0, 'b': 60.0, 'r2': 0.0}
-
-    x_vals = [p[0] for p in points]
-    y_vals = [p[1] for p in points]
-
-    # 如果正确率始终 > 90%，几乎无遗忘——标记为极长半衰期
-    if all(v > 0.90 for v in y_vals):
-        return {'a': 1.0, 'b': 300.0, 'r2': 0.90}
-
-    # 检查 y 值是否随 x 单调递减（遗忘曲线的必要条件）
-    is_decreasing = all(y_vals[i] >= y_vals[i+1] - 0.02 for i in range(len(y_vals)-1))
-
-    # 对数线性化: ln(R) = ln(a) - t/b → y' = ln(y), slope = -1/b, intercept = ln(a)
-    try:
-        log_y = [math.log(max(v, 0.01)) for v in y_vals]
-        n = len(x_vals)
-
-        # 纯 Python 线性回归: slope, intercept
-        mean_x = sum(x_vals) / n
-        mean_ly = sum(log_y) / n
-        num = sum((x_vals[i] - mean_x) * (log_y[i] - mean_ly) for i in range(n))
-        den = sum((x_vals[i] - mean_x) ** 2 for i in range(n))
-
-        if den > 0:
-            slope = num / den
-            # b 必须为正（遗忘 → 指数衰减）
-            if slope >= 0 or not is_decreasing:
-                # 斜率非负 → 无遗忘趋势，用超长半衰期
-                return {'a': 1.0, 'b': 300.0, 'r2': 0.85}
-            b_val = -1.0 / slope
-        else:
-            return {'a': 1.0, 'b': 60.0, 'r2': 0.0}
-
-        intercept = mean_ly - slope * mean_x
-        a_val = math.exp(intercept)
-
-        # R²
-        mean_y = sum(y_vals) / n
-        ss_res = sum((y_vals[i] - a_val * math.exp(-x_vals[i] / b_val)) ** 2 for i in range(n))
-        ss_tot = sum((y_vals[i] - mean_y) ** 2 for i in range(n))
-        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
-
-        # 限制 b 在合理范围
-        b_val = max(1.0, min(500.0, b_val))
-        a_val = max(0.5, min(1.5, a_val))
-        r2 = max(0.0, min(1.0, r2))
-
-    except Exception:
-        a_val, b_val, r2 = 1.0, 60.0, 0.0
-
-    return {
-        'a': round(float(a_val), 4),
-        'b': round(float(b_val), 1),
-        'r2': round(float(r2), 4)
-    }
-
-
-# ============================================================
 # HTML 模板（Vue 3 + Chart.js + Cyber Anime CSS）
 # ============================================================
 
@@ -573,19 +531,20 @@ def main():
 
     conn = get_db()
     try:
-        studylog, global_config, counts, words, book_stats, current_book = read_all_data(conn)
+        studylog, global_config, counts, words, all_words, book_stats, current_book = read_all_data(conn)
         essay_logs = read_essay_logs(conn)  # 必须在 conn.Close() 之前读取
     finally:
         conn.close()
 
     print(f"   StudyLog: {len(studylog)} 条记录")
     print(f"   已学词: {len(words)} 条 (当前词库: {current_book})")
+    print(f"   全部词库已学词: {len(all_words)} 条 (按 headWord 去重)")
     print(f"   词库数: {len(book_stats)}")
     print(f"   EssayLog: {len(essay_logs)} 条记录")
 
     # 计算指标
     page1 = compute_page1(studylog, words, counts, book_stats, current_book)
-    page2 = compute_page2(studylog, words)
+    page2 = compute_page2(studylog, all_words)
 
     # 组装数据
     dashboard_data = {
@@ -598,6 +557,7 @@ def main():
             'bookCount': len(book_stats),
             'totalStudyLogs': len(studylog),
             'totalWords': len(words),
+            'totalWordsAll': len(all_words),
         }
     }
 
