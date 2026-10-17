@@ -545,6 +545,8 @@ def main():
     # 计算指标
     page1 = compute_page1(studylog, words, counts, book_stats, current_book)
     page2 = compute_page2(studylog, all_words)
+    # current-scope variant (2026-10-18): academic page can toggle scope
+    page2['currentScope'] = compute_page2(studylog, words)
 
     # 组装数据
     dashboard_data = {

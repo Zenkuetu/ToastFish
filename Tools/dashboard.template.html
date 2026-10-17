@@ -1128,9 +1128,14 @@ const PageAcademic = {
 
     const destroyCharts = () => { charts.forEach(c => c?.destroy()); charts = [] }
 
-    onMounted(() => {
-      nextTick(() => {
-        const d = props.data?.page2
+    // ---- scope toggle (2026-10-18): all books / current book ----
+    const allData = props.data?.page2
+    const scope = ref('all')
+    const scopeData = computed(() => (scope.value === 'current' && allData && allData.currentScope)
+      ? allData.currentScope : allData)
+
+    const render = () => nextTick(() => {
+        const d = scopeData.value
         if (!d) return
         try {
 
@@ -1289,21 +1294,35 @@ const PageAcademic = {
         }
       } catch(e) { console.error('Academic charts:', e) }
     })
-  })
+
+    onMounted(render)
+    watch(scope, () => { destroyCharts(); render() })
 
     onBeforeUnmount(destroyCharts)
 
-    return { forgettingCurve, bjorkScatter, expansionCurve, diffZone, efficiency, d: props.data?.page2 }
+    return { forgettingCurve, bjorkScatter, expansionCurve, diffZone, efficiency, scope, allData, d: scopeData }
   },
   template: `
 <div class="page page-academic">
+  <!-- scope toggle (2026-10-18) -->
+  <div style="display:flex;align-items:center;gap:10px;margin:0 0 16px 0;flex-wrap:wrap;">
+    <span style="font-size:11px;color:var(--text-dim);">统计范围</span>
+    <button @click="scope='all'"
+            :style="{fontSize:'12px',padding:'5px 12px',borderRadius:'6px',cursor:'pointer',fontFamily:'inherit',border:'1px solid ' + (scope==='all' ? 'var(--neon-cyan)' : 'var(--border)'),background: scope==='all' ? 'rgba(0,240,255,0.12)' : 'transparent',color: scope==='all' ? 'var(--neon-cyan)' : 'var(--text-dim)'}">
+      全部词库 · {{allData.totalWords}} 词 · {{allData.bookCount}} 个词库
+    </button>
+    <button @click="scope='current'"
+            :style="{fontSize:'12px',padding:'5px 12px',borderRadius:'6px',cursor:'pointer',fontFamily:'inherit',border:'1px solid ' + (scope==='current' ? 'var(--neon-cyan)' : 'var(--border)'),background: scope==='current' ? 'rgba(0,240,255,0.12)' : 'transparent',color: scope==='current' ? 'var(--neon-cyan)' : 'var(--text-dim)'}">
+      当前词库 · {{(allData.currentScope||{}).totalWords || 0}} 词
+    </button>
+  </div>
   <!-- Forgetting Curve (full width) -->
   <div class="chart-card full-width" style="margin-bottom:20px;position:relative;">
     <h3>复习结果分布 · 按当前间隔分组</h3>
     <div class="chart-wrap" style="position:relative;">
       <canvas ref="forgettingCurve" height="280"></canvas>
     </div>
-    <p class="citation">100% 堆叠：每一档间隔里，最近一次评分分别是 Again / Hard / Good / Easy 的比例。数据库只保存每个词「最近一次」的评分，而间隔是答对后才扩张的，所以长间隔档天然偏高（生存偏差）——这张图描述的是复习结果分布，不能用来推算遗忘速率或半衰期。</p>
+    <p class="citation">100% 堆叠：每一档间隔里，最近一次评分分别是 Again / Hard / Good / Easy 的比例。数据库只保存每个词「最近一次」的评分，而间隔是答对后才扩张的，所以长间隔档天然偏高（生存偏差）——这张图描述的是复习结果分布，不能用来推算遗忘速率或半衰期。统计范围可在页首切换（全部词库 / 当前词库）。</p>
   </div>
 
   <!-- Bjork + Expansion -->
@@ -1356,10 +1375,11 @@ const PageAcademic = {
       <p class="citation" style="margin-top:8px;">颜色越绿 = 正确率越高 · 红色 = 需关注</p>
     </div>
     <div class="chart-card">
-      <h3>顽固词 Top {{d.hardWords.length}}<span style="font-size:11px;color:var(--text-dim);font-weight:400;"> · 全库 {{d.lapseCount}} / {{d.totalWords}} 词 · {{d.bookCount}} 个词库</span></h3>
+      <h3>顽固词 Top {{d.hardWords.length}}<span style="font-size:11px;color:var(--text-dim);font-weight:400;"> · {{ scope==='all' ? '全库' : '本词库' }} {{d.lapseCount}} / {{d.totalWords}} 词 · {{d.bookCount}} 个词库</span></h3>
       <table class="word-table">
         <thead><tr><th>#</th><th>单词</th><th>释义</th><th>难度</th><th>间隔</th><th>Score</th></tr></thead>
         <tbody>
+          <tr v-if="!d.hardWords.length"><td colspan="6" style="color:var(--text-dim);text-align:center;padding:18px 0;">本词库暂无顽固词（最近一次评分均 ≥ 80%）</td></tr>
           <tr v-for="(w, i) in d.hardWords" :key="w.word">
             <td style="color:var(--text-dim);">{{i + 1}}</td>
             <td class="word-col">{{w.word}}</td>
