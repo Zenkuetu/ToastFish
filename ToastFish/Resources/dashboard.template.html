@@ -1234,6 +1234,7 @@ function initNeuralBackground() {
     // 光标注意力核心：带惯性跟随的位置 + 速度能量 + 涟漪 / 拖尾粒子
     const cur = { x: -9999, y: -9999, px: -9999, py: -9999, energy: 0 }
     let ripples = [], trail = [], hist = [], idleT = 0
+    let lastScrollY = (window.scrollY || document.documentElement.scrollTop || 0)
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
       const el = document.getElementById('starfield')
@@ -1330,6 +1331,19 @@ function initNeuralBackground() {
         ctx.clearRect(0, 0, W, H)
         octx.clearRect(0, 0, W, H)
         const t = ts * 0.001
+
+        // 0) 视差：页面滚动时网络整体跟着上下走，但只走页面的 35% —— 背景比内容慢一拍
+        const scY = window.scrollY || document.documentElement.scrollTop || 0
+        const scD = scY - lastScrollY
+        if (scD) {
+          lastScrollY = scY
+          const par = scD * 0.35
+          for (const n of nodes) n.y -= par
+          for (const n of nodes) {
+            if (n.y < -20) n.y = H + 20
+            if (n.y > H + 20) n.y = -20
+          }
+        }
 
         // 1) 漂移（reduced-motion 时静止）
         if (!reduced) {
@@ -1459,13 +1473,13 @@ function initNeuralBackground() {
 
         // 6) 上层注意力光：绘制在内容之上（低透明度、只在光标附近，不干扰阅读）
         if (mouse.glow > 0.02 && cur.x > -1000) {
-          const R = CURSOR_R * (0.34 + 0.66 * Math.min(1, cur.energy * 1.1))
+          const R = CURSOR_R * (0.22 + 0.44 * Math.min(1, cur.energy * 1.1))
           const breath = 1 + 0.05 * Math.sin(t * 1.7)
           const eBoost = 1 + cur.energy * 0.35
           // 6-1 呼吸光晕
           const halo = octx.createRadialGradient(cur.x, cur.y, 0, cur.x, cur.y, R * breath)
-          halo.addColorStop(0, 'rgba(70, 235, 255, ' + (0.20 * mouse.glow * eBoost).toFixed(3) + ')')
-          halo.addColorStop(0.42, 'rgba(90, 150, 255, ' + (0.07 * mouse.glow).toFixed(3) + ')')
+          halo.addColorStop(0, 'rgba(70, 235, 255, ' + (0.13 * mouse.glow * eBoost).toFixed(3) + ')')
+          halo.addColorStop(0.42, 'rgba(90, 150, 255, ' + (0.042 * mouse.glow).toFixed(3) + ')')
           halo.addColorStop(1, 'rgba(0, 0, 0, 0)')
           octx.fillStyle = halo
           octx.beginPath()
@@ -1476,7 +1490,7 @@ function initNeuralBackground() {
           if (!reduced && hist.length > 2) {
             for (let i = 1; i < hist.length; i++) {
               const k = i / hist.length
-              octx.strokeStyle = 'rgba(120, 235, 255, ' + (k * k * 0.28 * mouse.glow).toFixed(3) + ')'
+              octx.strokeStyle = 'rgba(120, 235, 255, ' + (k * k * 0.19 * mouse.glow).toFixed(3) + ')'
               octx.lineWidth = k * 5.5 + 0.4
               octx.beginPath()
               octx.moveTo(hist[i - 1].x, hist[i - 1].y)
@@ -1490,14 +1504,14 @@ function initNeuralBackground() {
             octx.lineWidth = 1
             octx.setLineDash([3, 11])
             octx.lineDashOffset = -t * 30
-            octx.strokeStyle = 'rgba(120, 235, 255, ' + (0.24 * mouse.glow).toFixed(3) + ')'
+            octx.strokeStyle = 'rgba(120, 235, 255, ' + (0.17 * mouse.glow).toFixed(3) + ')'
             octx.beginPath()
             octx.arc(cur.x, cur.y, R * (0.5 + 0.02 * Math.sin(t * 1.2)), 0, Math.PI * 2)
             octx.stroke()
 
             octx.setLineDash([1, 16])
             octx.lineDashOffset = t * 22
-            octx.strokeStyle = 'rgba(255, 120, 240, ' + (0.16 * mouse.glow).toFixed(3) + ')'
+            octx.strokeStyle = 'rgba(255, 120, 240, ' + (0.11 * mouse.glow).toFixed(3) + ')'
             octx.beginPath()
             octx.arc(cur.x, cur.y, R * 0.78, 0, Math.PI * 2)
             octx.stroke()
@@ -1506,7 +1520,7 @@ function initNeuralBackground() {
             const a0 = t * 1.15
             for (let s = 0; s < 3; s++) {
               octx.lineWidth = 2.4 - s * 0.6
-              octx.strokeStyle = 'rgba(180, 250, 255, ' + ((0.26 - s * 0.06) * mouse.glow).toFixed(3) + ')'
+              octx.strokeStyle = 'rgba(180, 250, 255, ' + ((0.18 - s * 0.042) * mouse.glow).toFixed(3) + ')'
               octx.beginPath()
               octx.arc(cur.x, cur.y, R * 0.5, a0 + s * 0.55, a0 + s * 0.55 + 0.34)
               octx.stroke()
@@ -1523,7 +1537,7 @@ function initNeuralBackground() {
             const d = Math.hypot(n.x - cur.x, n.y - cur.y)
             if (d > R) continue
             const k = 1 - d / R
-            octx.strokeStyle = 'rgba(140, 235, 255, ' + (k * k * 0.55 * mouse.glow).toFixed(3) + ')'
+            octx.strokeStyle = 'rgba(140, 235, 255, ' + (k * k * 0.38 * mouse.glow).toFixed(3) + ')'
             octx.beginPath()
             octx.moveTo(cur.x, cur.y)
             octx.lineTo(n.x, n.y)
@@ -1535,7 +1549,7 @@ function initNeuralBackground() {
             if (d > R) continue
             const k = 1 - d / R
             const pulse = 1 + 0.18 * Math.sin(t * 3 + n.phase)
-            octx.fillStyle = 'rgba(210, 250, 255, ' + (k * 0.7 * mouse.glow * (0.5 + n.excite * 0.5)).toFixed(3) + ')'
+            octx.fillStyle = 'rgba(210, 250, 255, ' + (k * 0.5 * mouse.glow * (0.5 + n.excite * 0.5)).toFixed(3) + ')'
             octx.beginPath()
             octx.arc(n.x, n.y, (n.r + 1.1) * pulse, 0, Math.PI * 2)
             octx.fill()
@@ -1545,7 +1559,7 @@ function initNeuralBackground() {
         // 6-4 涟漪（快速移动时甩出），透明度跟光晕同步衰减 —— 停手即随光晕一起消失
         const gf = 0.12 + 0.88 * Math.min(1, mouse.glow * 1.5)
         for (const rp of ripples) {
-          const a = Math.max(0, rp.life) * 0.38 * (1 - rp.r / rp.max) * gf
+          const a = Math.max(0, rp.life) * 0.28 * (1 - rp.r / rp.max) * gf
           octx.strokeStyle = rp.magenta
             ? 'rgba(255, 120, 240, ' + a.toFixed(3) + ')'
             : 'rgba(120, 235, 255, ' + a.toFixed(3) + ')'
@@ -1557,7 +1571,7 @@ function initNeuralBackground() {
 
         // 6-5 拖尾粒子（沿移动方向缓慢消散）
         for (const tp of trail) {
-          const a = Math.max(0, tp.life) * 0.62 * gf
+          const a = Math.max(0, tp.life) * 0.46 * gf
           const rr = (1.6 + tp.life * 3) * 2.6
           const g2 = octx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, rr)
           g2.addColorStop(0, tp.magenta ? 'rgba(255, 140, 245, ' + a.toFixed(3) + ')' : 'rgba(170, 250, 255, ' + a.toFixed(3) + ')')
