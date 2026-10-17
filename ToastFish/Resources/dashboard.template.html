@@ -1375,12 +1375,12 @@ function initNeuralBackground() {
           cur.x += (mouse.x - cur.x) * 0.18
           cur.y += (mouse.y - cur.y) * 0.18
           const sp = Math.hypot(cur.x - cur.px, cur.y - cur.py)
-          cur.energy += (Math.min(1, sp / 14) - cur.energy) * 0.28
+          cur.energy += (Math.min(1, sp / 14) - cur.energy) * 0.42
           // 记录惯性跟随点的轨迹 → 画出拖尾光带
           hist.push({ x: cur.x, y: cur.y })
           if (hist.length > 16) hist.shift()
           // 光晕强度只跟移动速度走：停了就自然归零
-          mouse.glow += (Math.min(1, cur.energy * 1.05) - mouse.glow) * 0.36
+          mouse.glow += (Math.min(1, cur.energy * 1.05) - mouse.glow) * 0.52
           // 移动越快 = 一次注意力扫描，甩出涟漪与拖尾
           if (!reduced && cur.energy > 0.16 && Math.random() < cur.energy * 0.22 && ripples.length < 6) {
             ripples.push({ x: cur.x, y: cur.y, r: CURSOR_R * 0.1, max: CURSOR_R * (0.7 + Math.random() * 0.55), life: 1, magenta: Math.random() < 0.22 })
@@ -1396,15 +1396,15 @@ function initNeuralBackground() {
             })
           }
         } else {
-          mouse.glow *= 0.80
-          cur.energy *= 0.80
+          mouse.glow *= 0.70
+          cur.energy *= 0.70
           if (hist.length) hist.shift()
           if (mouse.glow < 0.02) { cur.x = -9999; cur.y = -9999; hist = [] }
         }
         for (let i = ripples.length - 1; i >= 0; i--) {
           const rp = ripples[i]
-          rp.r += (rp.max - rp.r) * 0.075 + 1.1
-          rp.life -= 0.060
+          rp.r += (rp.max - rp.r) * 0.11 + 1.6
+          rp.life -= 0.105
           if (rp.life <= 0 || rp.r >= rp.max) ripples.splice(i, 1)
         }
         for (let i = trail.length - 1; i >= 0; i--) {
@@ -1413,7 +1413,7 @@ function initNeuralBackground() {
           tp.y += tp.vy
           tp.vx *= 0.96
           tp.vy *= 0.96
-          tp.life -= 0.080
+          tp.life -= 0.135
           if (tp.life <= 0) trail.splice(i, 1)
         }
 
@@ -1542,9 +1542,10 @@ function initNeuralBackground() {
           }
         }
 
-        // 6-4 涟漪（快速移动时甩出 / 静止时呼吸），独立衰减，光标离开后仍会散完
+        // 6-4 涟漪（快速移动时甩出），透明度跟光晕同步衰减 —— 停手即随光晕一起消失
+        const gf = 0.12 + 0.88 * Math.min(1, mouse.glow * 1.5)
         for (const rp of ripples) {
-          const a = Math.max(0, rp.life) * 0.38 * (1 - rp.r / rp.max)
+          const a = Math.max(0, rp.life) * 0.38 * (1 - rp.r / rp.max) * gf
           octx.strokeStyle = rp.magenta
             ? 'rgba(255, 120, 240, ' + a.toFixed(3) + ')'
             : 'rgba(120, 235, 255, ' + a.toFixed(3) + ')'
@@ -1556,7 +1557,7 @@ function initNeuralBackground() {
 
         // 6-5 拖尾粒子（沿移动方向缓慢消散）
         for (const tp of trail) {
-          const a = Math.max(0, tp.life) * 0.62
+          const a = Math.max(0, tp.life) * 0.62 * gf
           const rr = (1.6 + tp.life * 3) * 2.6
           const g2 = octx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, rr)
           g2.addColorStop(0, tp.magenta ? 'rgba(255, 140, 245, ' + a.toFixed(3) + ')' : 'rgba(170, 250, 255, ' + a.toFixed(3) + ')')
