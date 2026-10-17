@@ -98,7 +98,7 @@ body::after {
 ::-webkit-scrollbar-thumb { background: linear-gradient(var(--neon-cyan-dim), var(--neon-magenta-dim)); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--neon-cyan); }
 
-#starfield { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0.85; }
+#starfield { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 1; mix-blend-mode: screen; }
 
 /* ============================================================
    动效基元
@@ -1224,49 +1224,251 @@ const AnimatedNumber = {
 }
 
 // ============================================================
-// Starfield Background
+// Neural Net Background —— 深度学习风格（节点 / 权重连线 / 前向传播脉冲）
+// 鼠标 = 一束「注意力」：靠近的节点被激活、连线被点亮，并沿边发射脉冲
+// 整层 pointer-events:none，不拦截任何点击/滚动；标签页隐藏时暂停
 // ============================================================
-const StarfieldBg = {
-  setup() {
-    const canvas = ref(null)
-    let animId = null
-    let stars = []
+function initNeuralBackground() {
+  let nodes = [], pulses = [], animId = null, lastT = 0
+    const mouse = { x: -9999, y: -9999, px: -9999, py: -9999, inside: false, glow: 0 }
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-    onMounted(() => {
-      const el = document.getElementById('starfield') || document.querySelector('#starfield')
+      const el = document.getElementById('starfield')
       if (!el) return
       const ctx = el.getContext('2d')
-      const resize = () => { el.width = window.innerWidth; el.height = window.innerHeight }
-      resize(); window.addEventListener('resize', resize)
+      // 上层「注意力光」画布：位于内容之上、导航之下，pointer-events:none 不影响任何操作
+      const ov = document.createElement('canvas')
+      ov.id = 'cursorfx'
+      ov.style.cssText = 'position:fixed;inset:0;z-index:70;pointer-events:none;mix-blend-mode:screen;opacity:1'
+      document.body.appendChild(ov)
+      const octx = ov.getContext('2d')
+      let W = 0, H = 0
 
-      stars = Array.from({length: 100}, () => ({
-        x: Math.random() * el.width, y: Math.random() * el.height,
-        r: Math.random() * 1.5 + 0.3, vx: (Math.random() - 0.5) * 0.3,
-        vy: (Math.random() - 0.5) * 0.3, a: Math.random()
-      }))
+      const LINK = 170, CURSOR_R = 210
+      let dpr = 1
 
-      const draw = () => {
-        ctx.clearRect(0, 0, el.width, el.height)
-        for (const s of stars) {
-          s.x += s.vx; s.y += s.vy
-          if (s.x < 0) s.x = el.width; if (s.x > el.width) s.x = 0
-          if (s.y < 0) s.y = el.height; if (s.y > el.height) s.y = 0
-          const flicker = 0.4 + 0.6 * Math.sin(Date.now() * 0.001 + s.a * 10)
+      const buildNodes = () => {
+        const count = Math.round(Math.min(94, Math.max(44, (W * H) / 24000)))
+        nodes = Array.from({ length: count }, () => ({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          vx: (Math.random() - 0.5) * 0.22,
+          vy: (Math.random() - 0.5) * 0.22,
+          r: 1.1 + Math.random() * 1.5,
+          magenta: Math.random() < 0.26,
+          phase: Math.random() * Math.PI * 2,
+          excite: 0
+        }))
+        pulses = []
+      }
+
+      const resize = () => {
+        dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+        W = window.innerWidth
+        H = window.innerHeight
+        el.width = Math.floor(W * dpr)
+        el.height = Math.floor(H * dpr)
+        el.style.width = W + 'px'
+        el.style.height = H + 'px'
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        ov.width = el.width
+        ov.height = el.height
+        ov.style.width = W + 'px'
+        ov.style.height = H + 'px'
+        octx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        buildNodes()
+      }
+
+      const spawnPulse = (a, b) => {
+        if (pulses.length > 26) return
+        pulses.push({ a, b, t: Math.random() * 0.25, sp: 0.006 + Math.random() * 0.012, magenta: nodes[a] && nodes[a].magenta })
+      }
+
+      const onMove = (e) => {
+        mouse.px = mouse.x
+        mouse.py = mouse.y
+        mouse.x = e.clientX
+        mouse.y = e.clientY
+        mouse.inside = true
+        const moved = Math.hypot(mouse.x - mouse.px, mouse.y - mouse.py)
+        if (moved < 1.5) return
+        // 鼠标移动 = 一次前向传播：激活附近节点并沿其边发射脉冲
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i]
+          const d = Math.hypot(n.x - mouse.x, n.y - mouse.y)
+          if (d < CURSOR_R) {
+            n.excite = Math.min(1, n.excite + 0.55 * (1 - d / CURSOR_R))
+            if (Math.random() < 0.05 && d < 130) {
+              const k = nearestIndex(i, LINK * 1.4)
+              if (k >= 0) spawnPulse(i, k)
+            }
+          }
+        }
+      }
+      const nearestIndex = (i, maxD) => {
+        let best = -1, bd = maxD
+        for (let k = 0; k < nodes.length; k++) {
+          if (k === i) continue
+          const d = Math.hypot(nodes[k].x - nodes[i].x, nodes[k].y - nodes[i].y)
+          if (d < bd) { bd = d; best = k }
+        }
+        return best
+      }
+      const onLeave = () => { mouse.inside = false; mouse.x = -9999; mouse.y = -9999 }
+
+      const draw = (ts) => {
+        animId = requestAnimationFrame(draw)
+        if (document.hidden) return
+        if (ts - lastT < 26) return
+        lastT = ts
+
+        ctx.clearRect(0, 0, W, H)
+        octx.clearRect(0, 0, W, H)
+        const t = ts * 0.001
+
+        // 1) 漂移（reduced-motion 时静止）
+        if (!reduced) {
+          for (const n of nodes) {
+            n.x += n.vx
+            n.y += n.vy
+            if (n.x < -20) n.x = W + 20
+            if (n.x > W + 20) n.x = -20
+            if (n.y < -20) n.y = H + 20
+            if (n.y > H + 20) n.y = -20
+          }
+        }
+        for (const n of nodes) n.excite *= 0.955
+
+        // 2) 权重连线
+        for (let i = 0; i < nodes.length; i++) {
+          const a = nodes[i]
+          for (let k = i + 1; k < nodes.length; k++) {
+            const b = nodes[k]
+            const dx = a.x - b.x, dy = a.y - b.y
+            const d2 = dx * dx + dy * dy
+            if (d2 > LINK * LINK) continue
+            const d = Math.sqrt(d2)
+            let al = (1 - d / LINK) * 0.155
+            const hot = Math.max(a.excite, b.excite)
+            if (hot > 0.02) al += (1 - d / LINK) * hot * 0.42
+            const mag = a.magenta || b.magenta
+            ctx.strokeStyle = mag
+              ? 'rgba(255, 43, 214, ' + al.toFixed(3) + ')'
+              : 'rgba(0, 240, 255, ' + al.toFixed(3) + ')'
+            ctx.lineWidth = 0.6 + hot * 0.5
+            ctx.beginPath()
+            ctx.moveTo(a.x, a.y)
+            ctx.lineTo(b.x, b.y)
+            ctx.stroke()
+          }
+        }
+
+        // 3) 鼠标 = 注意力光束：把光标连到附近节点
+        if (mouse.inside) {
+          mouse.glow += (1 - mouse.glow) * 0.12
+        } else {
+          mouse.glow *= 0.9
+        }
+        if (mouse.glow > 0.01) {
+          const g = ctx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, 120)
+          g.addColorStop(0, 'rgba(0, 240, 255, ' + (0.16 * mouse.glow).toFixed(3) + ')')
+          g.addColorStop(0.55, 'rgba(120, 120, 255, ' + (0.05 * mouse.glow).toFixed(3) + ')')
+          g.addColorStop(1, 'rgba(0, 0, 0, 0)')
+          ctx.fillStyle = g
           ctx.beginPath()
-          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
-          ctx.fillStyle = `rgba(0, 240, 255, ${flicker * 0.5})`
+          ctx.arc(mouse.x, mouse.y, 120, 0, Math.PI * 2)
+          ctx.fill()
+
+          for (const n of nodes) {
+            const d = Math.hypot(n.x - mouse.x, n.y - mouse.y)
+            if (d > CURSOR_R) continue
+            const k = 1 - d / CURSOR_R
+            ctx.strokeStyle = 'rgba(150, 220, 255, ' + (k * k * 0.55 * mouse.glow).toFixed(3) + ')'
+            ctx.lineWidth = 0.8
+            ctx.beginPath()
+            ctx.moveTo(mouse.x, mouse.y)
+            ctx.lineTo(n.x, n.y)
+            ctx.stroke()
+          }
+        }
+
+        // 4) 前向传播脉冲
+        for (let i = pulses.length - 1; i >= 0; i--) {
+          const p = pulses[i]
+          const a = nodes[p.a], b = nodes[p.b]
+          if (!a || !b) { pulses.splice(i, 1); continue }
+          p.t += p.sp * 1.6
+          if (p.t >= 1) {
+            pulses.splice(i, 1)
+            if (Math.random() < 0.28 && pulses.length < 26) {
+              const k = nearestIndex(p.b, LINK * 1.2)
+              if (k >= 0) spawnPulse(p.b, k)
+            }
+            continue
+          }
+          const x = a.x + (b.x - a.x) * p.t
+          const y = a.y + (b.y - a.y) * p.t
+          const rg = ctx.createRadialGradient(x, y, 0, x, y, 7)
+          rg.addColorStop(0, p.magenta ? 'rgba(255, 120, 240, 0.95)' : 'rgba(160, 250, 255, 0.95)')
+          rg.addColorStop(1, 'rgba(0, 0, 0, 0)')
+          ctx.fillStyle = rg
+          ctx.beginPath()
+          ctx.arc(x, y, 7, 0, Math.PI * 2)
           ctx.fill()
         }
-        animId = requestAnimationFrame(draw)
+
+        // 5) 节点（外圈光晕 + 内核）
+        for (const n of nodes) {
+          const breathe = 0.75 + 0.25 * Math.sin(t * 1.3 + n.phase)
+          const e = n.excite
+          const base = n.magenta ? '255, 43, 214' : '0, 240, 255'
+          ctx.fillStyle = 'rgba(' + base + ', ' + (0.10 + e * 0.30).toFixed(3) + ')'
+          ctx.beginPath()
+          ctx.arc(n.x, n.y, (n.r + 3.4) * (breathe + e * 0.5), 0, Math.PI * 2)
+          ctx.fill()
+          ctx.fillStyle = 'rgba(' + base + ', ' + (0.42 + e * 0.55 * breathe).toFixed(3) + ')'
+          ctx.beginPath()
+          ctx.arc(n.x, n.y, n.r * (1 + e * 0.45), 0, Math.PI * 2)
+          ctx.fill()
+        }
+
+        // 6) 上层注意力光：绘制在内容之上（透明度低、只出现在光标附近，不干扰阅读）
+        if (mouse.glow > 0.02) {
+          const R = CURSOR_R * 0.92
+          const halo = octx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, R)
+          halo.addColorStop(0, 'rgba(70, 235, 255, ' + (0.145 * mouse.glow).toFixed(3) + ')')
+          halo.addColorStop(0.5, 'rgba(90, 150, 255, ' + (0.045 * mouse.glow).toFixed(3) + ')')
+          halo.addColorStop(1, 'rgba(0, 0, 0, 0)')
+          octx.fillStyle = halo
+          octx.beginPath()
+          octx.arc(mouse.x, mouse.y, R, 0, Math.PI * 2)
+          octx.fill()
+
+          for (const n of nodes) {
+            const d = Math.hypot(n.x - mouse.x, n.y - mouse.y)
+            if (d > R) continue
+            const k = 1 - d / R
+            octx.strokeStyle = 'rgba(140, 235, 255, ' + (k * k * 0.46 * mouse.glow).toFixed(3) + ')'
+            octx.lineWidth = 0.9
+            octx.beginPath()
+            octx.moveTo(mouse.x, mouse.y)
+            octx.lineTo(n.x, n.y)
+            octx.stroke()
+            const node = n
+            octx.fillStyle = 'rgba(210, 250, 255, ' + (k * 0.7 * mouse.glow * (0.5 + node.excite * 0.5)).toFixed(3) + ')'
+            octx.beginPath()
+            octx.arc(node.x, node.y, node.r + 1.1, 0, Math.PI * 2)
+            octx.fill()
+          }
+        }
       }
-      draw()
-    })
 
-    onBeforeUnmount(() => { animId && cancelAnimationFrame(animId) })
+      resize()
+      window.addEventListener('resize', resize)
+      window.addEventListener('mousemove', onMove, { passive: true })
+      window.addEventListener('mouseout', onLeave)
+      animId = requestAnimationFrame(draw)
 
-    return { canvas }
-  },
-  template: '<div></div>'
 }
 
 // ============================================================
@@ -2258,7 +2460,6 @@ const App = {
 }
 
 const app = createApp(App)
-app.component('StarfieldBg', StarfieldBg)
 app.component('AnimatedNumber', AnimatedNumber)
 app.component('PageOverview', PageOverview)
 app.component('PageAcademic', PageAcademic)
@@ -2288,6 +2489,7 @@ try {
     el.innerHTML = '<div style="color:#FF3355;padding:40px;text-align:center;"><h1>Mount Failed</h1><pre style="font-size:12px;">' + (e.message || e) + '</pre></div>'
   }
 }
+initNeuralBackground()
 </script>
 </body>
 </html>
