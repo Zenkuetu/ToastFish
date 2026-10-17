@@ -1249,6 +1249,8 @@ function initNeuralBackground() {
       let W = 0, H = 0
 
       const LINK = 170, CURSOR_R = 210
+      // 指针排斥：光标 240px 内的节点被轻推着往外让开，推出去就留在那儿（不回弹）
+      const PUSH_R = 240, PUSH_STEP = 1.4
       let dpr = 1
 
       const buildNodes = () => {
@@ -1365,6 +1367,20 @@ function initNeuralBackground() {
         }
         for (const n of nodes) n.excite *= 0.955
 
+        // 1b) 指针排斥：光标附近的节点被轻轻推开，推出去就停在那儿 —— 不再弹回原位
+        // 用的是「每帧一小步」而不是「偏移量 + 弹簧」，所以指针快速扫过也只是把它们拨开
+        if (!reduced && cur.x > -1000) {
+          for (const n of nodes) {
+            const dx = n.x - cur.x, dy = n.y - cur.y
+            const d = Math.hypot(dx, dy)
+            if (d >= PUSH_R || d < 0.001) continue
+            const f = 1 - d / PUSH_R
+            const step = f * PUSH_STEP
+            n.x += (dx / d) * step
+            n.y += (dy / d) * step
+          }
+        }
+
         // 2) 权重连线
         for (let i = 0; i < nodes.length; i++) {
           const a = nodes[i]
@@ -1468,7 +1484,7 @@ function initNeuralBackground() {
           const breathe = 0.75 + 0.25 * Math.sin(t * 1.3 + n.phase)
           const e = n.excite
           const base = n.magenta ? '255, 43, 214' : '0, 240, 255'
-          // 快速漂移的点拖一小段彗尾：静止画面里也能看出它在动，慢点没有尾巴
+          // 快速漂移的点拖一小段彗尾巴：静止画面里也能看出它在动，慢点没有尾巴
           if (n.spd > 0.55) {
             const tl = Math.min(46, n.spd * 18)
             const gx = n.x - n.vx * tl, gy = n.y - n.vy * tl
