@@ -201,7 +201,7 @@ body::after {
    ============================================================ */
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -358,6 +358,19 @@ body::after {
   overflow-x: auto;
 }
 
+.calendar-dow {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-right: 4px;
+  font-size: 9px;
+  line-height: 14px;
+  height: 14px;
+  color: var(--text-dim);
+}
+
+.calendar-dow span { height: 14px; }
+
 .calendar-week {
   display: flex;
   flex-direction: column;
@@ -384,6 +397,10 @@ body::after {
 .calendar-day.count-2 { background: rgba(0, 240, 255, 0.3); }
 .calendar-day.count-3 { background: rgba(0, 240, 255, 0.55); }
 .calendar-day.count-4 { background: rgba(0, 240, 255, 0.8); box-shadow: 0 0 4px var(--neon-cyan-dim); }
+
+/* 未来日期：还没到，不是"漏学" */
+.calendar-day.future { background: transparent; border: 1px dashed rgba(255,255,255,0.06); cursor: default; }
+.calendar-day.future:hover { transform: none; box-shadow: none; }
 
 .calendar-labels {
   display: flex;
@@ -716,7 +733,7 @@ body::after {
    Responsive
    ============================================================ */
 @media (max-width: 1200px) {
-  .kpi-row { grid-template-columns: repeat(3, 1fr); }
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
   .chart-grid-2x2, .row-2col { grid-template-columns: 1fr; }
 }
 
@@ -944,7 +961,17 @@ const PageOverview = {
           }); charts.push(c)
         }
 
+        // 纵轴下限按数据自适应（向下取整到 5%，且不高于 80% 以便 85% 参考线可见）
+        const accFloor = (dd) => {
+          const vals = dd.dailyTrend.map(r => r.accuracy).filter(v => v !== null && v !== undefined)
+          if (!vals.length) return 0
+          const lo = Math.min(...vals)
+          return Math.max(0, Math.min(80, Math.min(85, Math.floor(lo / 5) * 5 - 5)))
+        }
+
         // ── Accuracy Line ──
+        // 正确率常年 95%+，固定 0-100 的轴会把它压成一条贴顶直线（看不出起伏），
+        // 改自动缩放；当天没学词的日期后端返回 null → 断线，不画成 0%（那会被误读成全错）。
         if (accuracyLine.value) {
           const ctx = accuracyLine.value.getContext('2d')
           const c = new Chart(ctx, {
@@ -955,32 +982,43 @@ const PageOverview = {
                 label: '正确率 %', data: d.dailyTrend.map(r => r.accuracy),
                 borderColor: '#FF00FF', borderWidth: 2, tension: 0.3,
                 pointBackgroundColor: '#FF00FF', pointRadius: 2.5,
-                pointHoverRadius: 5, fill: false
+                pointHoverRadius: 5, fill: false, spanGaps: false
+              }, {
+                // Bjork 合意难度区：正确率 85% 左右学习效率最高
+                label: '合意正确率 85%', data: d.dailyTrend.map(() => 85),
+                borderColor: 'rgba(255, 200, 60, 0.55)', borderWidth: 1, borderDash: [6, 4],
+                pointRadius: 0, pointHitRadius: 0, fill: false
               }]
             },
             options: {
               responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: { y: { min: 0, max: 100, ticks: { color: '#6060A0', callback: v => v + '%' } },
+              plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: {
+                  label: (ctx) => ctx.datasetIndex === 0
+                    ? '正确率 ' + ctx.raw + '% · 复习 ' + ((d.dailyTrend[ctx.dataIndex] || {}).words || 0) + ' 词'
+                    : '合意正确率 85%（Bjork）'
+                } }
+              },
+              scales: { y: { min: accFloor(d), max: 100,
+                             ticks: { color: '#6060A0', callback: v => v + '%' } },
                         x: { ticks: { color: '#6060A0', maxTicksLimit: 12 } } }
             }
           }); charts.push(c)
         }
 
         // ── Difficulty Histogram ──
+        // 旧实现按桶起点 lo >= 0.15 判定合意区，只亮 0.2-0.3；桶本身跨 0.15-0.35 边界，
+        // 判定必须用「区间与 0.15-0.35 有重叠」，且后端给 desirable 标志（与学术页一致）。
         if (diffHist.value) {
           const ctx = diffHist.value.getContext('2d')
-          const isDesirable = (label) => {
-            const lo = parseFloat(label.split('-')[0])
-            return lo >= 0.15 && lo < 0.35
-          }
           const c = new Chart(ctx, {
             type: 'bar',
             data: {
               labels: d.diffHist.map(x => x.label),
               datasets: [{
                 label: '词数', data: d.diffHist.map(x => x.count),
-                backgroundColor: d.diffHist.map(x => isDesirable(x.label)
+                backgroundColor: d.diffHist.map(x => x.desirable
                   ? 'rgba(255, 0, 255, 0.6)' : 'rgba(0, 240, 255, 0.35)'),
                 borderRadius: 3, borderSkipped: false
               }]
@@ -989,7 +1027,9 @@ const PageOverview = {
               responsive: true, maintainAspectRatio: false,
               plugins: {
                 legend: { display: false },
-                annotation: isDesirable ? {} : undefined
+                tooltip: { callbacks: {
+                  label: (ctx) => ctx.raw + ' 词' + (d.diffHist[ctx.dataIndex].desirable ? ' · 合意难度区' : '')
+                } }
               },
               scales: { y: { beginAtZero: true, ticks: { color: '#6060A0' } },
                         x: { ticks: { color: '#6060A0' } } }
@@ -1025,7 +1065,8 @@ const PageOverview = {
 
     onBeforeUnmount(destroyCharts)
 
-    return { dailyBar, cumArea, scoreStack, accuracyLine, diffHist, intervalDist, d: props.data?.page1 }
+    const startedBooks = computed(() => (props.data?.page1?.bookProgress || []).filter(b => b.learned > 0))
+    return { dailyBar, cumArea, scoreStack, accuracyLine, diffHist, intervalDist, startedBooks, d: props.data?.page1 }
   },
   template: `
 <div class="page page-overview">
@@ -1044,9 +1085,10 @@ const PageOverview = {
     <div class="chart-card">
       <h3>每日学习词数</h3>
       <div class="chart-wrap"><canvas ref="dailyBar" height="240"></canvas></div>
+      <div style="font-size:10px;color:var(--text-dim);margin-top:6px;">已补齐没学习的日期（高度 0），横轴是连续自然日</div>
     </div>
     <div class="chart-card">
-      <h3>累计词汇增长</h3>
+      <h3>累计学习词次 <span style="font-size:10px;color:var(--text-dim);">（含重复复习，非已学单词数）</span></h3>
       <div class="chart-wrap"><canvas ref="cumArea" height="240"></canvas></div>
     </div>
     <div class="chart-card">
@@ -1064,28 +1106,33 @@ const PageOverview = {
     <div class="chart-card">
       <h3>学习日历</h3>
       <div class="calendar-grid">
+        <div class="calendar-dow"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
         <template v-for="(week, wi) in calendarWeeks" :key="wi">
           <div class="calendar-week">
             <div v-for="day in week" :key="day.date"
                  class="calendar-day"
-                 :class="'count-' + (day.count >= 100 ? 4 : day.count >= 50 ? 3 : day.count >= 20 ? 2 : day.count > 0 ? 1 : 0)"
-                 :title="day.date + ': ' + day.count + ' 词'"></div>
+                 :class="[day.future ? 'future' : 'count-' + (day.count >= 100 ? 4 : day.count >= 50 ? 3 : day.count >= 20 ? 2 : day.count > 0 ? 1 : 0)]"
+                 :title="day.future ? day.date + '（未到）' : day.date + ': ' + day.count + ' 词'"></div>
           </div>
         </template>
       </div>
-      <div class="calendar-labels"><span>少</span><span>多</span></div>
+      <div class="calendar-labels">
+        <span>未来日期为虚框</span>
+        <span>色阶：0 · 1-19 · 20-49 · 50-99 · 100+ 词</span>
+      </div>
     </div>
     <div class="chart-card">
-      <h3>词库进度</h3>
+      <h3>词库进度 <span style="font-size:10px;color:var(--text-dim);">（已开始 {{d.startedBooks}} / {{d.totalBooks}} 个词库，仅列出已开始的）</span></h3>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px;">
-        <div v-for="b in d.bookProgress.slice(0, 8)" :key="b.name" style="display:flex;align-items:center;gap:8px;">
-          <span style="width:80px;font-size:11px;color:var(--text-dim);text-align:right;flex-shrink:0;">{{b.name}}</span>
+        <div v-for="b in startedBooks" :key="b.name" style="display:flex;align-items:center;gap:8px;">
+          <span style="width:100px;font-size:11px;color:var(--text-dim);text-align:right;flex-shrink:0;">{{b.display}}</span>
           <div style="flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden;">
             <div style="height:100%;border-radius:4px;background:linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta));box-shadow: 0 0 8px var(--neon-cyan-dim);"
                  :style="{width: b.pct + '%'}"></div>
           </div>
-          <span style="font-size:10px;color:var(--text-dim);width:80px;">{{b.learned}} / {{b.total}} ({{b.pct}}%)</span>
+          <span style="font-size:10px;color:var(--text-dim);width:96px;">{{b.learned}} / {{b.total}} ({{b.pct}}%)</span>
         </div>
+        <div v-if="!startedBooks.length" style="font-size:11px;color:var(--text-dim);">还没有开始任何词库</div>
       </div>
     </div>
   </section>
@@ -1095,10 +1142,12 @@ const PageOverview = {
     <div class="chart-card">
       <h3>难度分布 <span style="font-size:10px;color:var(--neon-magenta);">■ 合意难度区 (0.15-0.35)</span></h3>
       <div class="chart-wrap"><canvas ref="diffHist" height="240"></canvas></div>
+      <div style="font-size:10px;color:var(--text-dim);margin-top:6px;">统计范围：全部词库已学词 {{d.totalWords}} 个（按单词去重，与「学术」页一致）</div>
     </div>
     <div class="chart-card">
       <h3>复习间隔分布</h3>
       <div class="chart-wrap"><canvas ref="intervalDist" height="240"></canvas></div>
+      <div style="font-size:10px;color:var(--text-dim);margin-top:6px;">统计范围同上；间隔是「下次复习的天数」，答对才扩张，所以随学习推进整体右移</div>
     </div>
   </section>
 </div>`,

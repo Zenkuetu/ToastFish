@@ -157,7 +157,24 @@ def read_essay_logs(conn):
 # 指标计算 — 页面 1（学习概览）
 # ============================================================
 
-def compute_page1(studylog, words, counts, book_stats, current_book):
+BOOK_NAMES = {
+    'CET4_1': '四级核心词汇', 'CET4_3': '四级完整词汇',
+    'CET6_1': '六级核心词汇', 'CET6_2': '六级新增词汇', 'CET6_3': '六级完整词汇',
+    'Level4_1': '专四真题高频词', 'Level4luan_2': '专四核心词汇',
+    'Level8_1': '专八真题高频词', 'Level8luan_2': '专八核心词汇',
+    'KaoYan_1': '考研必考词汇', 'KaoYan_2': '考研完整词汇', 'KaoYan_3': '考研词频词汇',
+    'GMAT_3': 'GMAT 词汇', 'GRE_2': 'GRE 词汇', 'IELTS_3': 'IELTS 词汇',
+    'TOEFL_2': 'TOEFL 词汇', 'SAT_2': 'SAT 词汇',
+    'Goin': '顺序五十音', 'StdJp_Mid': '标准日本语中级词汇',
+}
+
+
+def compute_page1(studylog, all_words, counts, book_stats, current_book):
+    """学习概览页指标。
+
+    all_words 是「全部词库的已学词」（按 headWord 去重）。难度/间隔分布与学术页
+    同口径，避免同一份报告里两个页面的总数对不上。
+    """
     # --- KPI ---
     total_reviewed = sum(r['wordsReviewed'] for r in studylog)
     total_easy = sum(r['scoreEASY'] for r in studylog)
@@ -166,64 +183,70 @@ def compute_page1(studylog, words, counts, book_stats, current_book):
     total_again = sum(r['scoreAGAIN'] for r in studylog)
     total_scored = total_easy + total_good + total_hard + total_again
     accuracy = (total_easy + total_good) / total_scored * 100 if total_scored > 0 else 0
-    max_daily = max(r['wordsReviewed'] for r in studylog) if studylog else 0
+    max_daily = max((r['wordsReviewed'] for r in studylog), default=0)
 
-    # 连续天数
+    # 连续天数：max_streak = 历史最长；current_streak = 最后一段（且未断，最后记录距今 <= 1 天）
     dates = sorted(set(r['date'] for r in studylog))
-    streak = 1
-    max_streak = 1
-    for i in range(1, len(dates)):
-        d0 = datetime.strptime(dates[i-1], '%Y-%m-%d')
-        d1 = datetime.strptime(dates[i], '%Y-%m-%d')
-        if (d1 - d0).days == 1:
-            streak += 1
-            max_streak = max(max_streak, streak)
-        else:
-            streak = 1
+    today = datetime.now().date()
+    max_streak = 0
+    tail_streak = 0
+    prev = None
+    for ds in dates:
+        d = datetime.strptime(ds, '%Y-%m-%d').date()
+        tail_streak = tail_streak + 1 if (prev is not None and (d - prev).days == 1) else 1
+        max_streak = max(max_streak, tail_streak)
+        prev = d
+    current_streak = 0
+    if dates and (today - prev).days <= 1:
+        current_streak = tail_streak
     total_days = len(dates)
 
-    # 当前词库进度
-    book_total = counts.get(current_book, {}).get('number', 0)
-    book_current = counts.get(current_book, {}).get('current', 0)
-    book_mastered = sum(1 for w in words if w['status'] == 5)
+    # 当前词库进度：用词表现算的 learned（Count.current 是缓存列，可能漂移）
+    cur_stats = book_stats.get(current_book, {})
+    book_total = cur_stats.get('total') or counts.get(current_book, {}).get('number', 0)
+    book_current = cur_stats.get('learned') or counts.get(current_book, {}).get('current', 0)
 
     kpis = [
         {'icon': '📝', 'value': total_reviewed, 'label': '累计学习词次', 'format': 'int'},
-        {'icon': '🔥', 'value': max_streak, 'label': '最长连续天数', 'format': 'int'},
+        {'icon': '📖', 'value': len(all_words), 'label': '已学单词数（全库去重）', 'format': 'int'},
+        {'icon': '🔥', 'value': current_streak, 'label': '当前连续天数', 'format': 'int'},
+        {'icon': '🏅', 'value': max_streak, 'label': '最长连续天数', 'format': 'int'},
         {'icon': '📅', 'value': total_days, 'label': '有效学习天数', 'format': 'int'},
         {'icon': '🎯', 'value': round(accuracy, 1), 'label': '总正确率 %', 'format': 'pct'},
         {'icon': '⚡', 'value': max_daily, 'label': '最高单日词数', 'format': 'int'},
         {'icon': '📚', 'value': round(book_current / book_total * 100, 1) if book_total > 0 else 0,
-         'label': f'{current_book} 进度 %', 'format': 'pct'},
+         'label': f"{BOOK_NAMES.get(current_book, current_book)} 进度 %", 'format': 'pct'},
     ]
 
-    # --- 每日趋势 ---
+    # --- 每日趋势 / 累计（补全缺失日期，x 轴才是等距时间轴） ---
+    by_date = {r['date']: r for r in studylog}
     daily_trend = []
-    for r in studylog:
-        daily_trend.append({
-            'date': r['date'],
-            'words': r['wordsReviewed'],
-            'easy': r['scoreEASY'],
-            'good': r['scoreGOOD'],
-            'hard': r['scoreHARD'],
-            'again': r['scoreAGAIN'],
-            'accuracy': round((r['scoreEASY'] + r['scoreGOOD']) / r['wordsReviewed'] * 100, 1)
-            if r['wordsReviewed'] > 0 else 0
-        })
-
-    # --- 累计 ---
     cumulative = []
     acc = 0
-    for r in studylog:
-        acc += r['wordsReviewed']
-        cumulative.append({'date': r['date'], 'cumulative': acc})
+    if dates:
+        d = datetime.strptime(dates[0], '%Y-%m-%d').date()
+        last = datetime.strptime(dates[-1], '%Y-%m-%d').date()
+        while d <= last:
+            ds = d.strftime('%Y-%m-%d')
+            r = by_date.get(ds)
+            w = r['wordsReviewed'] if r else 0
+            e = r['scoreEASY'] if r else 0
+            g = r['scoreGOOD'] if r else 0
+            h = r['scoreHARD'] if r else 0
+            a = r['scoreAGAIN'] if r else 0
+            acc += w
+            daily_trend.append({
+                'date': ds,
+                'words': w, 'easy': e, 'good': g, 'hard': h, 'again': a,
+                # 当天没学 → 不画点（0% 会被误读成"全错"）
+                'accuracy': round((e + g) / w * 100, 1) if w > 0 else None,
+            })
+            cumulative.append({'date': ds, 'cumulative': acc})
+            d += timedelta(days=1)
 
-    # --- 学习日历热力图（最近 20 周） ---
-    today = datetime.now().date()
-    # 找到最近的星期日
+    # --- 学习日历热力图（最近 20 周，周一开头，未来日期单独标记） ---
     end_sunday = today + timedelta(days=(6 - today.weekday()))
     start_date = end_sunday - timedelta(days=20 * 7 - 1)
-
     date_word_map = {r['date']: r['wordsReviewed'] for r in studylog}
     calendar_data = []
     d = start_date
@@ -233,27 +256,25 @@ def compute_page1(studylog, words, counts, book_stats, current_book):
             'date': ds,
             'count': date_word_map.get(ds, 0),
             'weekday': d.weekday(),
-            'week': (d - start_date).days // 7
+            'week': (d - start_date).days // 7,
+            'future': d > today,
         })
         d += timedelta(days=1)
 
-    # --- 难度分布 ---
-    diff_buckets = [
-        {'label': '0.0-0.1', 'lo': 0.0, 'hi': 0.1},
-        {'label': '0.1-0.2', 'lo': 0.1, 'hi': 0.2},
-        {'label': '0.2-0.3', 'lo': 0.2, 'hi': 0.3},
-        {'label': '0.3-0.4', 'lo': 0.3, 'hi': 0.4},
-        {'label': '0.4-0.5', 'lo': 0.4, 'hi': 0.5},
-        {'label': '0.5-1.0', 'lo': 0.5, 'hi': 1.0},
-    ]
+    # --- 难度分布（10 档，合意区按"与 0.15-0.35 有重叠"判定，与学术页一致） ---
     diff_hist = []
-    for b in diff_buckets:
-        if b['hi'] >= 1.0:
-            # 末桶闭合，difficulty 恰为 1.0（或越界）也要计入
-            cnt = sum(1 for w in words if w['difficulty'] >= b['lo'])
+    for i in range(10):
+        lo = round(i * 0.1, 1)
+        hi = round(lo + 0.1, 1)
+        if i == 9:
+            cnt = sum(1 for w in all_words if w['difficulty'] >= lo)
         else:
-            cnt = sum(1 for w in words if b['lo'] <= w['difficulty'] < b['hi'])
-        diff_hist.append({'label': b['label'], 'count': cnt})
+            cnt = sum(1 for w in all_words if lo <= w['difficulty'] < hi)
+        diff_hist.append({
+            'label': f'{lo:.1f}-{hi:.1f}',
+            'count': cnt,
+            'desirable': lo < 0.35 and hi > 0.15,
+        })
 
     # --- 间隔分布 ---
     interval_buckets = [
@@ -268,32 +289,25 @@ def compute_page1(studylog, words, counts, book_stats, current_book):
     interval_hist = []
     for b in interval_buckets:
         if b['hi'] >= 9999:
-            cnt = sum(1 for w in words if w['daysBetweenReviews'] >= b['lo'])
+            cnt = sum(1 for w in all_words if w['daysBetweenReviews'] >= b['lo'])
         else:
-            cnt = sum(1 for w in words if b['lo'] <= w['daysBetweenReviews'] < b['hi'])
+            cnt = sum(1 for w in all_words if b['lo'] <= w['daysBetweenReviews'] < b['hi'])
         interval_hist.append({'label': b['label'], 'count': cnt})
 
-    # --- 词库进度排行 ---
+    # --- 词库进度排行（含中文名；0 进度的词库只计数，不逐个列出） ---
     book_progress = []
     for name, stats in sorted(book_stats.items(),
                               key=lambda x: x[1]['learned'], reverse=True):
         if stats['total'] > 0:
             book_progress.append({
                 'name': name,
+                'display': BOOK_NAMES.get(name, name),
                 'total': stats['total'],
                 'learned': stats['learned'],
                 'mastered': stats['mastered'],
-                'pct': round(stats['learned'] / stats['total'] * 100, 1)
+                'pct': round(stats['learned'] / stats['total'] * 100, 1),
             })
-
-    # --- Status 分布 ---
-    status_dist = {}
-    for w in words:
-        s = w['status']
-        status_dist[s] = status_dist.get(s, 0) + 1
-    status_names = {1: '学习步 1', 2: '学习步 2', 3: '重学 1', 4: '重学 2', 5: '已学完'}
-    status_pie = [{'name': status_names.get(k, f'Status {k}'), 'count': v}
-                  for k, v in sorted(status_dist.items())]
+    started_books = sum(1 for b in book_progress if b['learned'] > 0)
 
     return {
         'kpis': kpis,
@@ -303,8 +317,10 @@ def compute_page1(studylog, words, counts, book_stats, current_book):
         'diffHist': diff_hist,
         'intervalHist': interval_hist,
         'bookProgress': book_progress,
-        'statusPie': status_pie,
         'totalReviewed': total_reviewed,
+        'totalWords': len(all_words),
+        'startedBooks': started_books,
+        'totalBooks': len(book_progress),
         'totalEasy': total_easy,
         'totalGood': total_good,
         'totalHard': total_hard,
@@ -543,7 +559,7 @@ def main():
     print(f"   EssayLog: {len(essay_logs)} 条记录")
 
     # 计算指标
-    page1 = compute_page1(studylog, words, counts, book_stats, current_book)
+    page1 = compute_page1(studylog, all_words, counts, book_stats, current_book)
     page2 = compute_page2(studylog, all_words)
     # current-scope variant (2026-10-18): academic page can toggle scope
     page2['currentScope'] = compute_page2(studylog, words)
