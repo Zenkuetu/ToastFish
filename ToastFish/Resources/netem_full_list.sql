@@ -1,3 +1,8 @@
+-- 数据来源：exam-data/NETEMVocabulary（考研词汇词频排序数据）
+--   https://github.com/exam-data/NETEMVocabulary
+-- 该数据以 CC BY-NC-SA 4.0 许可发布（署名 · 非商业性使用 · 相同方式共享）
+--   https://creativecommons.org/licenses/by-nc-sa/4.0/
+-- 本文件为上游 netem_full_list.sql 的原样副本，仅此注释头由 ToastFish 项目添加。
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 

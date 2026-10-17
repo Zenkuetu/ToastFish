@@ -125,3 +125,4 @@ git clone https://github.com/Uahh/ToastFish
 
 - 本项目整体遵循 [MIT License](LICENSE)，版权归原作者 [Uahh](https://github.com/Uahh/ToastFish)。
 - 二次开发部分同样以 MIT 协议发布，使用时请保留上述版权与许可声明。
+- **词库数据**：考研词频词汇（`KaoYan_3`）来自 [exam-data/NETEMVocabulary](https://github.com/exam-data/NETEMVocabulary)，以 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 发布 —— **不得用于商业用途**，分发时须保留署名并以相同协议共享。详见根目录 [README](../../README.md#词库数据来源)。

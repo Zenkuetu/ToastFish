@@ -3,6 +3,10 @@
 将 netem_full_list.sql（2024 考研英语一大纲词汇表，按词频排序）导入 inami.db，
 新建 KaoYan_3 词库表。
 
+数据来源: exam-data/NETEMVocabulary  https://github.com/exam-data/NETEMVocabulary
+          以 CC BY-NC-SA 4.0 发布（署名·非商业性使用·相同方式共享），
+          该词库数据禁止商业使用；分发衍生数据须保留署名并以相同协议共享。
+
 原始字段: id, frequency, word, definition, variant, category, subcategory
 字段映射:
   id         -> wordRank  (主键)
