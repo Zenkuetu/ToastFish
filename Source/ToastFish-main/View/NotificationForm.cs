@@ -2998,20 +2998,23 @@ form.PlaceBottomRight();
         /// <summary>距屏幕工作区右下角的边距</summary>
         public int ScreenMargin { get; private set; }
 
-        // ===== Ctrl 等比放大（2026-10-18，用户需求：所有弹窗按住 Ctrl 等比例放大 100%，松开还原）=====
+        // ===== Alt 等比放大（2026-10-18 用户需求 Ctrl→Alt；按住 Alt 等比例放大 100%，松开还原）=====
 
-        /// <summary>按住 Ctrl 时的放大倍数（2 = 放大 100%）</summary>
-        public const float CtrlZoomScale = 2f;
-        /// <summary>Ctrl 需连续按住的时长，避免 Ctrl+C / Ctrl+V 之类组合键顺手把弹窗放大</summary>
-        private const int CtrlZoomHoldMs = 120;
-        /// <summary>Ctrl 状态轮询间隔</summary>
-        private const int CtrlZoomPollMs = 80;
+        /// <summary>按住 Alt 时的放大倍数（2 = 放大 100%）</summary>
+        public const float ZoomScale = 2f;
+        /// <summary>
+        /// Alt 需连续按住的时长。Alt 同时是答题热键（ALT+1~4）与 Alt+Tab 的修饰键，
+        /// 阈值不能太小，否则快速连按答题 / 切窗口会顺手把弹窗放大。
+        /// </summary>
+        private const int ZoomHoldMs = 300;
+        /// <summary>Alt 状态轮询间隔</summary>
+        private const int ZoomPollMs = 80;
 
         // 基准尺寸在「第一次缩放那一刻」才记录：阅读/完形弹窗会在 Shown 里二次调整高度，
         // 用构造函数里的初始高度会导致还原时窗口变矮（实测 504 → 381）。
         private int _baseWidth;
         private int _baseHeight;
-        private int _ctrlHeldMs;
+        private int _modHeldMs;
         private float _zoom = 1f;
         private Control[] _zoomControls;
         private Rectangle[] _zoomBounds;
@@ -3037,12 +3040,12 @@ form.PlaceBottomRight();
             if (font != null) Font = font;
             ScreenMargin = margin;
 
-            DoubleBuffered = true;   // Ctrl 放大时整体重绘，减少闪烁
+            DoubleBuffered = true;   // Alt 放大时整体重绘，减少闪烁
 
-            // Ctrl 是全局键：弹窗不抢焦点（ShowWithoutActivation），KeyDown 收不到，
+            // Alt 是全局键：弹窗不抢焦点（ShowWithoutActivation），KeyDown 收不到，
             // 所以用轮询 ModifierKeys（GetKeyState，与焦点无关）来判断。
-            _zoomTimer = new System.Windows.Forms.Timer { Interval = CtrlZoomPollMs };
-            _zoomTimer.Tick += (s2, e2) => PollCtrlZoom();
+            _zoomTimer = new System.Windows.Forms.Timer { Interval = ZoomPollMs };
+            _zoomTimer.Tick += (s2, e2) => PollZoom();
             _zoomTimer.Start();
             Disposed += (s2, e2) =>
             {
@@ -3104,25 +3107,25 @@ form.PlaceBottomRight();
             Show();
         }
 
-        // ===== Ctrl 等比放大实现 =====
+        // ===== Alt 等比放大实现 =====
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern int SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
         private const int WM_SETREDRAW = 0x000B;
 
-        /// <summary>轮询 Ctrl 状态：连续按住超过 CtrlZoomHoldMs 才放大，松开立刻还原</summary>
-        private void PollCtrlZoom()
+        /// <summary>轮询 Alt 状态：连续按住超过 ZoomHoldMs 才放大，松开立刻还原</summary>
+        private void PollZoom()
         {
             if (IsDisposed) return;
-            bool ctrl = (Control.ModifierKeys & Keys.Control) == Keys.Control;
-            if (!ctrl)
+            bool held = (Control.ModifierKeys & Keys.Alt) == Keys.Alt;
+            if (!held)
             {
-                _ctrlHeldMs = 0;
+                _modHeldMs = 0;
                 if (_zoom > 1f) ApplyZoom(1f);
                 return;
             }
-            _ctrlHeldMs += CtrlZoomPollMs;
-            if (_ctrlHeldMs >= CtrlZoomHoldMs && _zoom < CtrlZoomScale - 0.01f) ApplyZoom(CtrlZoomScale);
+            _modHeldMs += ZoomPollMs;
+            if (_modHeldMs >= ZoomHoldMs && _zoom < ZoomScale - 0.01f) ApplyZoom(ZoomScale);
         }
 
         /// <summary>把整个弹窗按 s 倍等比缩放（窗口尺寸、每个子控件的坐标/尺寸/内边距/字体、RichTextBox 的 ZoomFactor 一起变）</summary>
