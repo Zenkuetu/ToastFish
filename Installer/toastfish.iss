@@ -1,4 +1,4 @@
-; ToastFish Inno Setup 安装脚本
+﻿; ToastFish Inno Setup 安装脚本
 ; 编译器: ISCC.exe (Inno Setup 6.7+)
 ; 运行: "ISCC.exe" toastfish.iss
 ; 说明: 本脚本内所有路径均为相对 .iss 所在目录（Installer\），克隆到任意位置都能编译。
@@ -265,21 +265,41 @@ begin
   Result := '';
 end;
 
-// 自动搜索可能的旧数据库位置（均为相对路径，不含硬编码盘符）
+// 自动搜索可能的旧数据库位置，避免升级时必须手填路径
+// 顺序：注册表里的旧安装目录 → 安装包同级仓库目录 → 默认安装目录
 function AutoDetectOldDb: String;
 var
-  RepoPath, InstalledPath: String;
+  RepoPath, InstalledPath, PrevDir, PrevDb: String;
 begin
   Result := '';
-  // 1) 开发机：安装包若位于仓库的 Installer\ 目录下，旧库在同级 ToastFish\Resources\
-  RepoPath := ExpandConstant('{src}\..\ToastFish\Resources\inami.db');
-  // 2) 已安装过：%LOCALAPPDATA%\ToastFish\Resources\inami.db
-  InstalledPath := ExpandConstant('{localappdata}\ToastFish\Resources\inami.db');
+  // 1) 上一版（任何 Inno Setup 版本）登记过的安装目录 —— 最可靠，
+  //    用户改过安装位置、或者旧版不在 %LOCALAPPDATA% 时也能找到
+  if RegQueryStringValue(HKCU,
+       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1',
+       'InstallLocation', PrevDir) then
+  begin
+    PrevDb := AddBackslash(PrevDir) + 'Resources\inami.db';
+    if FileExists(PrevDb) then
+      Result := PrevDb;
+  end;
 
-  if FileExists(RepoPath) then
-    Result := RepoPath
-  else if FileExists(InstalledPath) then
-    Result := InstalledPath;
+  // 2) 开发机：安装包若位于仓库的 Installer\ 目录下，旧库在同级 ToastFish\Resources\
+  if Result = '' then
+  begin
+    RepoPath := ExpandConstant('{src}\..\ToastFish\Resources\inami.db');
+    if FileExists(RepoPath) then
+      Result := RepoPath;
+  end;
+
+  // 3) 默认安装位置：%LOCALAPPDATA%\ToastFish\Resources\inami.db
+  if Result = '' then
+  begin
+    InstalledPath := ExpandConstant('{localappdata}\ToastFish\Resources\inami.db');
+    if FileExists(InstalledPath) then
+      Result := InstalledPath;
+  end;
+
+  Log('AutoDetectOldDb = ' + Result);
 end;
 
 // 在"选择附加任务"页之后创建数据迁移文件选择页
@@ -324,32 +344,62 @@ begin
 
   if CurStep = ssPostInstall then
   begin
-    // 覆盖安装不迁移（数据库已有数据）
+    // 覆盖安装：旧库已在原位，学习数据本来就保留着，无需（也不该）再复制
     if not IsFirstDbInstall then
+    begin
+      Log('Migration skipped: existing db found at ' + ExpandConstant('{app}\Resources\inami.db'));
+      if WizardIsTaskSelected('migratedata') and (Trim(MigrationPage.Values[0]) <> '') then
+        MsgBox('检测到这台电脑上已经装有 ToastFish 的数据库。' + #13#10#13#10 +
+               '学习进度、SM2+ 参数和统计记录会原样保留，本次无需导入，已自动跳过。' + #13#10#13#10 +
+               '你选的文件未做任何改动：' + #13#10 + MigrationPage.Values[0],
+               mbInformation, MB_OK);
       Exit;
+    end;
 
     // 用户未勾选迁移任务 → 使用空白数据库
     if not WizardIsTaskSelected('migratedata') then
+    begin
+      Log('Migration skipped: task not selected');
       Exit;
+    end;
 
-    OldDbPath := MigrationPage.Values[0];
+    OldDbPath := Trim(MigrationPage.Values[0]);
     if OldDbPath = '' then
+    begin
+      Log('Migration skipped: empty source path');
       Exit;
+    end;
 
     NewDbPath := ExpandConstant('{app}\Resources\inami.db');
 
     // 验证用户选择的文件
     if not FileExists(OldDbPath) then
     begin
+      Log('Migration failed: source not found ' + OldDbPath);
       MsgBox('未找到指定的数据库文件：' + #13#10 + OldDbPath + #13#10#13#10 +
              '将使用空白数据库开始。', mbInformation, MB_OK);
       Exit;
     end;
 
-    // 执行迁移
+    // 源和目标是同一个文件（旧版本就装在这个目录）→ 什么都不用做
+    if CompareText(OldDbPath, NewDbPath) = 0 then
+    begin
+      Log('Migration skipped: source equals destination');
+      MsgBox('学习数据就在当前安装目录中，已经是最新的，无需导入。', mbInformation, MB_OK);
+      Exit;
+    end;
+
+    // 执行迁移（先清掉可能残留的 WAL 影子文件，再连 db + -wal/-shm 一起复制）
+    DeleteFile(NewDbPath + '-wal');
+    DeleteFile(NewDbPath + '-shm');
     Migrated := CopyFile(OldDbPath, NewDbPath, False);
     if Migrated then
     begin
+      if FileExists(OldDbPath + '-wal') then
+        CopyFile(OldDbPath + '-wal', NewDbPath + '-wal', False);
+      if FileExists(OldDbPath + '-shm') then
+        CopyFile(OldDbPath + '-shm', NewDbPath + '-shm', False);
+      Log('Migration OK: ' + OldDbPath + ' -> ' + NewDbPath);
       MsgBox('学习数据导入成功！' + #13#10#13#10 +
              '位置：' + NewDbPath + #13#10 +
              '学习进度、SM2+ 参数和统计记录已全部保留。',
@@ -357,9 +407,14 @@ begin
     end
     else
     begin
+      Log('Migration failed: CopyFile returned false, src=' + OldDbPath);
       MsgBox('导入失败：无法复制数据库文件。' + #13#10#13#10 +
-             '可能原因：磁盘空间不足或权限不够。' + #13#10 +
-             '将使用空白数据库开始。',
+             '文件：' + OldDbPath + #13#10 +
+             '目标：' + NewDbPath + #13#10#13#10 +
+             '可能原因：旧版 ToastFish 还在运行（数据库被占用）、' +
+             '磁盘空间不足、或没有读取该文件的权限。' + #13#10 +
+             '可以先用「以管理员身份运行」或把 inami.db 复制到桌面后再试。' + #13#10 +
+             '本次将使用空白数据库开始。',
              mbError, MB_OK);
     end;
   end;
