@@ -83,6 +83,7 @@ namespace ToastFish.Model.PushControl
         public static void OrderGoin(Object Words)
         {
             IsLearningActive = true;
+            PushWords.RoundAbort = false;
             try
             {
             WordType WordList = (WordType)Words;
@@ -205,6 +206,7 @@ namespace ToastFish.Model.PushControl
         public static void UnorderGoin(Object Num)
         {
             IsLearningActive = true;
+            PushWords.RoundAbort = false;
             try
             {
             int Number = (int)Num;

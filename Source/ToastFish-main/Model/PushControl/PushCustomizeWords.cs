@@ -32,6 +32,7 @@ namespace ToastFish.Model.PushControl
         public static new void Recitation(Object Words)
         {
             IsLearningActive = true;
+            PushWords.RoundAbort = false;
             try
             {
             WordType WordList = (WordType)Words;

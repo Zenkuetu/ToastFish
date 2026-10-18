@@ -56,6 +56,16 @@ namespace ToastFish.Model.PushControl
         /// <summary>是否有学习会话正在活跃。惊喜复习系统检查此标志以避免打断学习。</summary>
         public static volatile bool IsLearningActive = false;
 
+        /// <summary>
+        /// #94（3.4.1）：请求中断当前这一轮。等待热键的循环会尽快退出，
+        /// 让 finally 里的 IsLearningActive = false 得以执行 —— 否则一旦弹窗被顶掉，
+        /// 线程就永久阻塞、ALT+Q 只能弹"本轮复习仍在进行中，请稍候…"，只能重启软件。
+        /// 每一轮开始时由入口方法复位为 false。
+        /// </summary>
+        public static volatile bool RoundAbort = false;
+
+        public static void RequestAbortRound() { RoundAbort = true; }
+
         /// <summary>测试模式：本轮学习结束后自动恢复数据库，不保存学习记录。</summary>
         public static volatile bool TestMode = false;
 
@@ -463,9 +473,30 @@ namespace ToastFish.Model.PushControl
         }
 
         /// <summary>
+        /// #94（3.4.1）：等待用户按键，同时具备自愈能力。
+        /// 旧实现是 return await Tcs.Task：如果等待期间弹窗被别的通知顶掉 / 被强行关闭，
+        /// 这个 Task 永远不会完成，线程永久阻塞，finally 里的 IsLearningActive = false 也永远不执行，
+        /// 于是 ALT+Q / ALT+H 全部失效、只能重启软件。
+        /// 现在改成 120ms 轮询：一旦「见过弹窗 → 现在一个都不剩」，或收到中断请求，
+        /// 就返回 strandedValue（SM2 用 0 = 重播并重弹同一个词，选择题用 -1 = 跳过此题），让这一轮继续跑。
+        /// </summary>
+        private static int AwaitAnswer(TaskCompletionSource<int> Tcs, int strandedValue)
+        {
+            bool seenPopup = false;
+            while (true)
+            {
+                Tcs.Task.Wait(120);
+                if (Tcs.Task.IsCompleted) return Tcs.Task.Result;
+                if (RoundAbort) return strandedValue;
+                if (NotificationForm.HasAnyLivePopup) seenPopup = true;
+                else if (seenPopup) return strandedValue;
+            }
+        }
+
+        /// <summary>
         /// 推送单词的Task
         /// </summary>
-        public async Task<int> ProcessToastNotificationRecitation()
+        public Task<int> ProcessToastNotificationRecitation()
         {
             var Tcs = new TaskCompletionSource<int>();
 
@@ -479,11 +510,11 @@ namespace ToastFish.Model.PushControl
                 }
             }))
             {
-                return await Tcs.Task;
+                return Task.FromResult(AwaitAnswer(Tcs, 0));   // #94：弹窗人间蒸发时按"重播 → 重弹这个词"继续
             }
         }
 
-        public async Task<int> ProcessToastNotificationRecitationSM2()
+        public Task<int> ProcessToastNotificationRecitationSM2()
         {
             var Tcs = new TaskCompletionSource<int>();
 
@@ -499,14 +530,14 @@ namespace ToastFish.Model.PushControl
                 }
             }))
             {
-                return await Tcs.Task;
+                return Task.FromResult(AwaitAnswer(Tcs, 0));   // #94：弹窗人间蒸发时按"重播 → 重弹这个词"继续
             }
         }
 
         /// <summary>
         /// 推送问题的Task
         /// </summary>
-        public async Task<int> ProcessToastNotificationQuestion()
+        public Task<int> ProcessToastNotificationQuestion()
         {
             var Tcs = new TaskCompletionSource<int>();
 
@@ -524,7 +555,7 @@ namespace ToastFish.Model.PushControl
                     Tcs.TrySetResult(Ans == QUESTION_CURRENT_RIGHT_ANSWER ? 1 : 0);
             }))
             {
-                return await Tcs.Task;
+                return Task.FromResult(AwaitAnswer(Tcs, -1));  // #94：弹窗人间蒸发时跳过此题，别把整轮测试卡死
             }
         }
 
@@ -681,6 +712,8 @@ namespace ToastFish.Model.PushControl
             System.Data.SQLite.SQLiteTransaction testTx = null;
 
             IsLearningActive = true;
+
+            RoundAbort = false;
             try
             {
             WordType WordList = (WordType)wordtype;
@@ -1089,6 +1122,7 @@ namespace ToastFish.Model.PushControl
         public static void Recitation(Object Words)
         {
             IsLearningActive = true;
+            RoundAbort = false;
             try
             {
             Select Query = new Select();
@@ -1229,6 +1263,7 @@ namespace ToastFish.Model.PushControl
         public void UnorderWord(Object Num)
         {
             IsLearningActive = true;
+            RoundAbort = false;
             try
             {
             int Number = (int)Num;

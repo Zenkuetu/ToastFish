@@ -97,7 +97,12 @@ namespace ToastFish
                     PushWords.HotKeytObservable.raiseEvent("S");
                     break;
                 case "H":
-                    NotificationForm.ToggleVisibility();
+                    // #94（3.4.1）自愈：弹窗已经没了但这一轮还挂着，按 Alt+H 直接重开，
+                    // 而不是像旧版那样什么都不做（只能重启软件）。
+                    if (!NotificationForm.HasAnyLivePopup && PushWords.IsLearningActive)
+                        Begin_Click(null, EventArgs.Empty);
+                    else
+                        NotificationForm.ToggleVisibility();
                     break;
                 default:
                     break;
@@ -484,10 +489,41 @@ namespace ToastFish
             // 由 Alt+Q 重新显示它、继续当前进度；确实没有可恢复的弹窗时给一句提示，避免"按了没反应"。
             if (PushWords.IsLearningActive)
             {
-                if (!NotificationForm.ResumeCurrentPopup() && NotificationForm.Current == null)
+                // 还活着的弹窗（含 Alt+H 隐藏、超时收起）→ 重新显示，继续这一轮
+                if (NotificationForm.ResumeCurrentPopup())
+                    return;
+
+                // #94（3.4.1）自愈：弹窗其实已经没了（被提示消息顶掉 / 被强行关闭），
+                // 等待热键的线程会永久阻塞，只能重启软件。这里主动中断这一轮，
+                // 等线程退出（finally 会把 IsLearningActive 复位）后再照常开新一轮。
+                if (!NotificationForm.HasAnyLivePopup)
+                {
+                    PushWords.RequestAbortRound();
+                    for (int i = 0; i < 60 && PushWords.IsLearningActive; i++)
+                        Thread.Sleep(100);
+
+                    if (PushWords.IsLearningActive)
+                    {
+                        // 等了 6 秒还没收尾：旧线程已经不在了（异常退出 / 卡在别的等待里），
+                        // 强行复位标志，否则用户永远开不了新一轮（旧版只能重启软件）。
+                        // RoundAbort 仍为 true，残留线程一旦醒来会立刻退出，不会长期和新一轮并存。
+                        PushWords.IsLearningActive = false;
+                        NotificationForm.ShowMessage("ToastFish", "上一轮已中断，正在重新开始…");
+                    }
+                }
+                else if (NotificationForm.Current == null)
+                {
                     NotificationForm.ShowMessage("ToastFish", "本轮复习仍在进行中，请稍候…");
-                return;
+                    return;
+                }
+                else
+                {
+                    // 弹窗存在但不可恢复（不是隐藏态）→ 说明用户正看着它，给一句提示即可
+                    NotificationForm.ShowMessage("ToastFish", "本轮复习仍在进行中，请稍候…");
+                    return;
+                }
             }
+            PushWords.RoundAbort = false;   // #94：新一轮开始前清掉上一轮的中断标记
 
             if (!System.IO.Directory.Exists("Log"))  {
                 System.IO.Directory.CreateDirectory("Log");
@@ -501,9 +537,14 @@ namespace ToastFish
 
             if (state == System.Threading.ThreadState.WaitSleepJoin || state == System.Threading.ThreadState.Stopped)
             {
-                thread.Abort();
-                while (thread.ThreadState != System.Threading.ThreadState.Aborted)
+                // #94：旧版是 while (状态 != Aborted) 无限等。线程如果早已正常结束（Stopped），
+                // Abort() 是空操作、状态永远不会变成 Aborted → 这里会永久卡住。
+                try { thread.Abort(); } catch { }
+                for (int i = 0; i < 30; i++)
                 {
+                    var ts = thread.ThreadState;
+                    if (ts == System.Threading.ThreadState.Aborted || ts == System.Threading.ThreadState.Stopped)
+                        break;
                     Thread.Sleep(100);
                 }
                 if(Select.TABLE_NAME == "Goin")
@@ -601,9 +642,14 @@ namespace ToastFish
 
             if (state == System.Threading.ThreadState.WaitSleepJoin || state == System.Threading.ThreadState.Stopped)
             {
-                thread.Abort();
-                while (thread.ThreadState != System.Threading.ThreadState.Aborted)
+                // #94：旧版是 while (状态 != Aborted) 无限等。线程如果早已正常结束（Stopped），
+                // Abort() 是空操作、状态永远不会变成 Aborted → 这里会永久卡住。
+                try { thread.Abort(); } catch { }
+                for (int i = 0; i < 30; i++)
                 {
+                    var ts = thread.ThreadState;
+                    if (ts == System.Threading.ThreadState.Aborted || ts == System.Threading.ThreadState.Stopped)
+                        break;
                     Thread.Sleep(100);
                 }
                 if (Select.TABLE_NAME == "Goin")
@@ -727,9 +773,14 @@ namespace ToastFish
             var state = thread.ThreadState;
             if (state == System.Threading.ThreadState.WaitSleepJoin || state == System.Threading.ThreadState.Stopped)
             {
-                thread.Abort();
-                while (thread.ThreadState != System.Threading.ThreadState.Aborted)
+                // #94：旧版是 while (状态 != Aborted) 无限等。线程如果早已正常结束（Stopped），
+                // Abort() 是空操作、状态永远不会变成 Aborted → 这里会永久卡住。
+                try { thread.Abort(); } catch { }
+                for (int i = 0; i < 30; i++)
                 {
+                    var ts = thread.ThreadState;
+                    if (ts == System.Threading.ThreadState.Aborted || ts == System.Threading.ThreadState.Stopped)
+                        break;
                     Thread.Sleep(100);
                 }
             }
@@ -746,9 +797,14 @@ namespace ToastFish
             var state = thread.ThreadState;
             if (state == System.Threading.ThreadState.WaitSleepJoin || state == System.Threading.ThreadState.Stopped)
             {
-                thread.Abort();
-                while (thread.ThreadState != System.Threading.ThreadState.Aborted)
+                // #94：旧版是 while (状态 != Aborted) 无限等。线程如果早已正常结束（Stopped），
+                // Abort() 是空操作、状态永远不会变成 Aborted → 这里会永久卡住。
+                try { thread.Abort(); } catch { }
+                for (int i = 0; i < 30; i++)
                 {
+                    var ts = thread.ThreadState;
+                    if (ts == System.Threading.ThreadState.Aborted || ts == System.Threading.ThreadState.Stopped)
+                        break;
                     Thread.Sleep(100);
                 }
                 if (Select.TABLE_NAME == "Goin")
@@ -768,9 +824,14 @@ namespace ToastFish
             var state = thread.ThreadState;
             if (state == System.Threading.ThreadState.WaitSleepJoin || state == System.Threading.ThreadState.Stopped)
             {
-                thread.Abort();
-                while (thread.ThreadState != System.Threading.ThreadState.Aborted)
+                // #94：旧版是 while (状态 != Aborted) 无限等。线程如果早已正常结束（Stopped），
+                // Abort() 是空操作、状态永远不会变成 Aborted → 这里会永久卡住。
+                try { thread.Abort(); } catch { }
+                for (int i = 0; i < 30; i++)
                 {
+                    var ts = thread.ThreadState;
+                    if (ts == System.Threading.ThreadState.Aborted || ts == System.Threading.ThreadState.Stopped)
+                        break;
                     Thread.Sleep(100);
                 }
             }

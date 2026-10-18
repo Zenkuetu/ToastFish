@@ -28,9 +28,40 @@ namespace ToastFish.View
             public int TotalMs;            // 原始超时（毫秒）
             public DateTime StartedAt;     // Timer 启动时刻
             public int PausedRemainingMs;  // 暂停时剩余毫秒数（-1 = 未暂停）
+            public bool Interactive;       // #94：是否"正在等用户按键"的弹窗（单词 / 测验）
+            public bool Answered;          // #94：用户已经作答，可以安全关闭了
         }
 
         private static bool _isHidden = false;
+
+        /// <summary>
+        /// #94（3.4.1）：当前是否还有活着的弹窗（被只隐藏、没关闭的也算）。
+        /// 学习线程用它判断"我在等的那张弹窗是不是已经被别人关掉了"。
+        /// </summary>
+        public static bool HasAnyLivePopup
+        {
+            get { var f = _current; return f != null && !f.IsDisposed; }
+        }
+
+        /// <summary>
+        /// #94（3.4.1）：当前弹窗是否正在等用户按键（单词窗 / 测验窗，且用户还没作答）。
+        /// 这种弹窗绝不能被普通提示消息关掉：等待线程靠 HotKeytObservable 完成，
+        /// 弹窗一旦消失就永远等不到回调，整轮复习卡死（IsLearningActive 永远为 true）。
+        /// </summary>
+        private static bool IsLiveInteractiveUnanswered()
+        {
+            var f = _current;
+            if (f == null || f.IsDisposed) return false;
+            var st = f.Tag as PopupState;
+            return st != null && st.Interactive && !st.Answered;
+        }
+
+        /// <summary>#94：标记这张弹窗已经作答，之后普通提示消息就可以安全关掉它了。</summary>
+        private static void MarkAnswered(Form form)
+        {
+            var st = form?.Tag as PopupState;
+            if (st != null) st.Answered = true;
+        }
 
         // 弹窗超时常量（毫秒）
         public const int TIMEOUT_WORD  = 180000; // 单词弹窗：3分钟
@@ -251,7 +282,7 @@ namespace ToastFish.View
                         Tag = idx
                     };
                     btn.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
-                    btn.Click += (s, e) => { form.Close(); callback(idx); };
+                    btn.Click += (s, e) => { MarkAnswered(form); form.Close(); callback(idx); };
                     form.Controls.Add(btn);
                 }
 
@@ -265,7 +296,7 @@ namespace ToastFish.View
                     _isHidden = true;
                 };
                 timer.Start();
-                form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
+                form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1, Interactive = true };
 
                 form.FormClosed += (s, e) =>
                 {
@@ -470,14 +501,23 @@ namespace ToastFish.View
 
             dispatcher.BeginInvoke(new Action(() =>
             {
-                _current?.Close();
-                _current?.Dispose();
+                // #94（3.4.1）：正在等用户按键的单词/测验弹窗不能被提示消息顶掉。
+                // 旧行为是无条件 Close + Dispose，等待热键的线程从此永远等不到回调，
+                // 整轮复习卡死（IsLearningActive 永远是 true），ALT+Q / ALT+H 全部失效、只能重启软件。
+                // 现在改成叠在上方的一层浮层，并且不接管 _current，原弹窗继续等按键。
+                bool overlay = IsLiveInteractiveUnanswered();
+                if (!overlay)
+                {
+                    _current?.Close();
+                    _current?.Dispose();
+                }
 
                 var form = new PopupForm(420, 160, title, font: new Font("Microsoft YaHei UI", 12), margin: 16);
 
-                // 定位右下角
+                // 定位右下角（浮层模式往上挪，避免盖住正在答题的弹窗）
                 var wa = Screen.PrimaryScreen.WorkingArea;
                 form.PlaceBottomRight(wa);
+                if (overlay) form.Top = Math.Max(wa.Top + 8, form.Top - 180);
 
                 var titleLabel = new Label
                 {
@@ -505,10 +545,19 @@ namespace ToastFish.View
                 timer.Start();
                 form.Tag = new PopupState { Timer = timer, TotalMs = autoDismissMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
 
-                form.FormClosed += (s, e) => { if (_current == form) _current = null; _isHidden = false; form.Dispose(); timer.Dispose(); };
+                form.FormClosed += (s, e) =>
+                {
+                    // 浮层不接管 _current，关掉它不能影响正在等按键的弹窗状态
+                    if (_current == form) { _current = null; _isHidden = false; }
+                    form.Dispose();
+                    timer.Dispose();
+                };
 
-                _isHidden = false;
-                _current = form;
+                if (!overlay)
+                {
+                    _isHidden = false;
+                    _current = form;
+                }
                 form.Show();
             }));
         }
@@ -716,7 +765,7 @@ namespace ToastFish.View
                         Tag = idx
                     };
                     btn.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
-                    btn.Click += (s, e) => { form.Close(); callback(idx); };
+                    btn.Click += (s, e) => { MarkAnswered(form); form.Close(); callback(idx); };
                     form.Controls.Add(btn);
                     y += btnHs[i] + btnGap;
                 }
@@ -731,7 +780,7 @@ namespace ToastFish.View
                     _isHidden = true;
                 };
                 timer.Start();
-                form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
+                form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1, Interactive = true };
 
                 form.FormClosed += (s, e) =>
                 {
@@ -1729,7 +1778,7 @@ namespace ToastFish.View
                     {
                         btn.BackColor = Color.FromArgb(51, 51, 51);
                     };
-                    btn.Click += (s, e) => { form.Close(); callback(idx); };
+                    btn.Click += (s, e) => { MarkAnswered(form); form.Close(); callback(idx); };
                     form.Controls.Add(btn);
                     y += btnHs[i] + btnGap;
                 }
