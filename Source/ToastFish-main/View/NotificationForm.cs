@@ -2912,6 +2912,29 @@ form.PlaceBottomRight();
         /// <summary>距屏幕工作区右下角的边距</summary>
         public int ScreenMargin { get; private set; }
 
+        // ===== Ctrl 等比放大（2026-10-18，用户需求：所有弹窗按住 Ctrl 等比例放大 100%，松开还原）=====
+
+        /// <summary>按住 Ctrl 时的放大倍数（2 = 放大 100%）</summary>
+        public const float CtrlZoomScale = 2f;
+        /// <summary>Ctrl 需连续按住的时长，避免 Ctrl+C / Ctrl+V 之类组合键顺手把弹窗放大</summary>
+        private const int CtrlZoomHoldMs = 120;
+        /// <summary>Ctrl 状态轮询间隔</summary>
+        private const int CtrlZoomPollMs = 80;
+
+        // 基准尺寸在「第一次缩放那一刻」才记录：阅读/完形弹窗会在 Shown 里二次调整高度，
+        // 用构造函数里的初始高度会导致还原时窗口变矮（实测 504 → 381）。
+        private int _baseWidth;
+        private int _baseHeight;
+        private int _ctrlHeldMs;
+        private float _zoom = 1f;
+        private Control[] _zoomControls;
+        private Rectangle[] _zoomBounds;
+        private Font[] _zoomFonts;
+        private Padding[] _zoomPaddings;
+        private int[] _zoomRightMargins;
+        private Size _zoomAutoScroll;
+        private System.Windows.Forms.Timer _zoomTimer;
+
         public PopupForm(int width, int height, string title = "ToastFish",
                          Color? back = null, Color? fore = null,
                          Font font = null, int margin = DefaultEdge)
@@ -2927,6 +2950,18 @@ form.PlaceBottomRight();
             ForeColor = fore ?? DefaultFore;
             if (font != null) Font = font;
             ScreenMargin = margin;
+
+            DoubleBuffered = true;   // Ctrl 放大时整体重绘，减少闪烁
+
+            // Ctrl 是全局键：弹窗不抢焦点（ShowWithoutActivation），KeyDown 收不到，
+            // 所以用轮询 ModifierKeys（GetKeyState，与焦点无关）来判断。
+            _zoomTimer = new System.Windows.Forms.Timer { Interval = CtrlZoomPollMs };
+            _zoomTimer.Tick += (s2, e2) => PollCtrlZoom();
+            _zoomTimer.Start();
+            Disposed += (s2, e2) =>
+            {
+                if (_zoomTimer != null) { _zoomTimer.Stop(); _zoomTimer.Dispose(); _zoomTimer = null; }
+            };
         }
 
         /// <summary>定位到屏幕工作区右下角（原先 11 处各写 3 行的样板）</summary>
@@ -2981,6 +3016,159 @@ form.PlaceBottomRight();
             NotificationForm.Hidden = false;
             NotificationForm.Current = this;
             Show();
+        }
+
+        // ===== Ctrl 等比放大实现 =====
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern int SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        private const int WM_SETREDRAW = 0x000B;
+
+        /// <summary>轮询 Ctrl 状态：连续按住超过 CtrlZoomHoldMs 才放大，松开立刻还原</summary>
+        private void PollCtrlZoom()
+        {
+            if (IsDisposed) return;
+            bool ctrl = (Control.ModifierKeys & Keys.Control) == Keys.Control;
+            if (!ctrl)
+            {
+                _ctrlHeldMs = 0;
+                if (_zoom > 1f) ApplyZoom(1f);
+                return;
+            }
+            _ctrlHeldMs += CtrlZoomPollMs;
+            if (_ctrlHeldMs >= CtrlZoomHoldMs && _zoom < CtrlZoomScale - 0.01f) ApplyZoom(CtrlZoomScale);
+        }
+
+        /// <summary>把整个弹窗按 s 倍等比缩放（窗口尺寸、每个子控件的坐标/尺寸/内边距/字体、RichTextBox 的 ZoomFactor 一起变）</summary>
+        private void ApplyZoom(float target)
+        {
+            if (IsDisposed) return;
+            float s = Math.Max(1f, target);
+            if (Math.Abs(s - _zoom) < 0.01f) return;
+            if (_zoomControls == null) CaptureZoomBase();
+
+            // 放大后不能超出工作区（阅读/完形弹窗本来就接近满屏，硬放大会顶出屏幕）
+            var wa = Screen.PrimaryScreen.WorkingArea;
+            float fit = Math.Min(
+                (wa.Width - ScreenMargin * 2f) / Math.Max(1, _baseWidth),
+                (wa.Height - ScreenMargin * 2f) / Math.Max(1, _baseHeight));
+            if (fit < s) s = Math.Max(1f, fit);
+            if (Math.Abs(s - _zoom) < 0.01f) return;
+
+            // 保持「相对右下角」的偏移量：提示消息叠在题目上方时 Top 有额外上移，缩放后要保留
+            int dx = Left - (wa.Right - Width - ScreenMargin);
+            int dy = Top - (wa.Bottom - Height - ScreenMargin);
+
+            _zoom = s;
+            try
+            {
+                for (int i = 0; i < _zoomControls.Length; i++)
+                {
+                    var c = _zoomControls[i];
+                    if (c == null || c.IsDisposed) continue;
+
+                    var rtb = c as RichTextBox;
+                    if (rtb != null)
+                    {
+                        // RichTextBox 正文是按 SelectionFont 逐段设置的（目标词黄色加粗）。
+                        // ⚠️ 千万不能给 RichTextBox 赋 Font —— 赋值会把整段正文重排成同一字体/颜色，
+                        // 目标词高亮会全部丢失（实测 2x 下高亮消失）。
+                        // 只有 ZoomFactor 能整体等比放大显示，同时把按像素计的 RightMargin 一起放大，
+                        // 否则换行宽度仍是 1x、字变大了却提前折行。
+                        // RightMargin 是「逻辑单位」，ZoomFactor 会一起放大它，
+                        // 所以这里绝对不能乘 s —— 乘了会让换行宽度变成 2 倍再 2 倍，文字被窗口右边缘裁掉。
+                        try { rtb.ZoomFactor = s; }
+                        catch { }
+                    }
+                    else
+                    {
+                        var f = _zoomFonts[i];
+                        if (f != null)
+                        {
+                            try { c.Font = new Font(f.FontFamily, f.Size * s, f.Style, f.Unit); }
+                            catch { /* 字体不支持该字号时保持原样 */ }
+                        }
+                    }
+
+                    var b = _zoomBounds[i];
+                    c.Bounds = new Rectangle(
+                        (int)Math.Round(b.X * s), (int)Math.Round(b.Y * s),
+                        (int)Math.Round(b.Width * s), (int)Math.Round(b.Height * s));
+
+                    var p = _zoomPaddings[i];
+                    c.Padding = new Padding(
+                        (int)Math.Round(p.Left * s), (int)Math.Round(p.Top * s),
+                        (int)Math.Round(p.Right * s), (int)Math.Round(p.Bottom * s));
+                }
+
+                Width = (int)Math.Round(_baseWidth * s);
+                Height = (int)Math.Round(_baseHeight * s);
+                if (!_zoomAutoScroll.IsEmpty)
+                {
+                    AutoScrollMinSize = new Size(
+                        (int)Math.Round(_zoomAutoScroll.Width * s),
+                        (int)Math.Round(_zoomAutoScroll.Height * s));
+                }
+
+                Left = wa.Right - Width - ScreenMargin + dx;
+                Top = wa.Bottom - Height - ScreenMargin + dy;
+            }
+            finally
+            {
+                ResumeLayout(true);
+                PerformLayout();
+                if (IsHandleCreated)
+                {
+                    TopMost = true;
+                    BringToFront();
+                }
+                Invalidate(true);
+            }
+        }
+
+        /// <summary>首次缩放前记录「原始 1 倍状态」，之后任何倍数都从这份基准重算，避免反复缩放累积误差</summary>
+        private void CaptureZoomBase()
+        {
+            var cs = new System.Collections.Generic.List<Control>();
+            var bs = new System.Collections.Generic.List<Rectangle>();
+            var fs = new System.Collections.Generic.List<Font>();
+            var ps = new System.Collections.Generic.List<Padding>();
+            var rms = new System.Collections.Generic.List<int>();
+            Action<Control> walk = null;
+            walk = parent =>
+            {
+                foreach (Control c in parent.Controls)
+                {
+                    cs.Add(c);
+                    bs.Add(c.Bounds);
+                    fs.Add(c.Font);
+                    ps.Add(c.Padding);
+                    var rt = c as RichTextBox;
+                    rms.Add(rt != null ? rt.RightMargin : 0);
+                    if (c.Controls.Count > 0) walk(c);
+                }
+            };
+            walk(this);
+            _baseWidth = Width;
+            _baseHeight = Height;
+            _zoomControls = cs.ToArray();
+            _zoomBounds = bs.ToArray();
+            _zoomFonts = fs.ToArray();
+            _zoomPaddings = ps.ToArray();
+            _zoomRightMargins = rms.ToArray();
+            _zoomAutoScroll = AutoScrollMinSize;
+        }
+
+        /// <summary>切换窗口重绘（缩放时不闪）</summary>
+        private bool SetRedraw(bool enabled)
+        {
+            if (!IsHandleCreated) return true;
+            try
+            {
+                SendMessage(Handle, WM_SETREDRAW, enabled ? (IntPtr)1 : IntPtr.Zero, IntPtr.Zero);
+            }
+            catch { }
+            return enabled;
         }
     }
 }

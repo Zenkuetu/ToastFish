@@ -126,6 +126,7 @@ namespace ToastFish
             }
         }
 
+
         private void SetNotifyIcon()
         {
             Vm.notifyIcon = new NotifyIcon();
