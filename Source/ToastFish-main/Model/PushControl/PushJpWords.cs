@@ -8,6 +8,7 @@ using Microsoft.Toolkit.Uwp.Notifications;
 using System.Speech.Synthesis;
 using System.Threading;
 using ToastFish.Model.Log;
+using ToastFish.View;
 
 namespace ToastFish.Model.PushControl
 {
@@ -68,66 +69,25 @@ namespace ToastFish.Model.PushControl
             int AnswerIndex = Rd.Next(3);
             QUESTION_CURRENT_RIGHT_ANSWER = AnswerIndex;
 
+            // 按正确顺序排列选项 [A, B, C]，正确答案在 AnswerIndex 位置
+            string[] ordered;
             if (AnswerIndex == 0)
-            {
-                try {
-    new ToastContentBuilder()
-    .AddText("翻译\n" + Question)
-        .AddButton(new ToastButton()
-    .SetContent("A." + A)
-    .AddArgument("action", "0")
-    .SetBackgroundActivation())
-        .AddButton(new ToastButton()
-    .SetContent("B." + B)
-    .AddArgument("action", "1")
-    .SetBackgroundActivation())
-        .AddButton(new ToastButton()
-    .SetContent("C." + C)
-    .AddArgument("action", "2")
-    .SetBackgroundActivation())
-        .Show();
-                } catch { }
-            }
+                ordered = new[] { "A." + A, "B." + B, "C." + C };
             else if (AnswerIndex == 1)
-            {
-                try {
-    new ToastContentBuilder()
-    .AddText("翻译\n" + Question)
-        .AddButton(new ToastButton()
-    .SetContent("A." + B)
-    .AddArgument("action", "0")
-    .SetBackgroundActivation())
-        .AddButton(new ToastButton()
-    .SetContent("B." + A)
-    .AddArgument("action", "1")
-    .SetBackgroundActivation())
-        .AddButton(new ToastButton()
-    .SetContent("C." + C)
-    .AddArgument("action", "2")
-    .SetBackgroundActivation())
-    .Show();
-                } catch { }
-            }
-            else if (AnswerIndex == 2)
-            {
-                try {
-    new ToastContentBuilder()
-    .AddText("翻译\n" + Question)
-        .AddButton(new ToastButton()
-    .SetContent("A." + C)
-    .AddArgument("action", "0")
-    .SetBackgroundActivation())
-        .AddButton(new ToastButton()
-    .SetContent("B." + B)
-    .AddArgument("action", "1")
-    .SetBackgroundActivation())
-        .AddButton(new ToastButton()
-    .SetContent("C." + A)
-    .AddArgument("action", "2")
-    .SetBackgroundActivation())
-    .Show();
-                } catch { }
-            }
+                ordered = new[] { "A." + B, "B." + A, "C." + C };
+            else
+                ordered = new[] { "A." + C, "B." + B, "C." + A };
+
+            // 2026-10-18：改用应用内弹窗出题（与英语随机测试一致）。
+            // 原来用 UWP Toast 的按钮，但按钮激活要靠 ToastNotificationManagerCompat.OnActivated，
+            // 日语流程从来没订阅过它（只有五十音订阅过），所以 toast 上的 A/B/C 点了没反应，
+            // 只能靠 ALT+1/2/3 答题。
+            NotificationForm.ShowQuizPopup("翻译", Question, ordered,
+                answerIdx =>
+                {
+                    if (answerIdx >= 0 && answerIdx <= 2)
+                        HotKeytObservable.raiseEvent((answerIdx + 1).ToString());
+                });
         }
 
         public static new void Recitation(Object Words)
@@ -246,11 +206,7 @@ namespace ToastFish.Model.PushControl
                 else if (pushJpWords.QUESTION_CURRENT_STATUS == 0)
                 {
                     //CopyList.Remove(CurrentWord);
-                    try {
-    new ToastContentBuilder()
-    .AddText("错误 正确答案：" + pushJpWords.AnswerDict[pushJpWords.QUESTION_CURRENT_RIGHT_ANSWER.ToString()] + '.' + CurrentWord.headWord)
-    .Show();
-                    } catch { }
+                    ToastBridge.ShowMessage("ToastFish", "错误 正确答案：" + pushJpWords.AnswerDict[pushJpWords.QUESTION_CURRENT_RIGHT_ANSWER.ToString()] + '.' + CurrentWord.headWord, 3000);
                     Thread.Sleep(3000);
                 }
             }
@@ -269,7 +225,20 @@ namespace ToastFish.Model.PushControl
             int Number = (int)Num;
             Select Query = new Select();
             PushJpWords pushJpWords = new PushJpWords();
-            List<JpWord> TestList = Query.GetRandomJpWords(Number);
+
+            // 2026-10-18：一个词都没学过时不该开始随机测试（旧版会从整本词库抽，包括没学过的词）
+            if (Query.GetLearnedWordCount() == 0)
+            {
+                pushJpWords.PushMessage("当前词库还没有学过的单词，先去学一轮再来测试吧");
+                return;
+            }
+
+            List<JpWord> TestList = Query.GetRandomLearnedJpWords(Number);
+            if (TestList.Count == 0)
+            {
+                pushJpWords.PushMessage("当前词库还没有学过的单词，先去学一轮再来测试吧");
+                return;
+            }
 
             CreateLog Log = new CreateLog();
             String LogName = "Log\\" + DateTime.Now.ToString().Replace('/', '-').Replace(' ', '_').Replace(':', '-') + "_随机日语单词.xlsx";
@@ -306,11 +275,7 @@ namespace ToastFish.Model.PushControl
                 else if (pushJpWords.QUESTION_CURRENT_STATUS == 0)
                 {
                     //CopyList.Remove(CurrentWord);
-                    try {
-    new ToastContentBuilder()
-    .AddText("错误 正确答案：" + pushJpWords.AnswerDict[pushJpWords.QUESTION_CURRENT_RIGHT_ANSWER.ToString()] + '.' + CurrentWord.headWord)
-    .Show();
-                    } catch { }
+                    ToastBridge.ShowMessage("ToastFish", "错误 正确答案：" + pushJpWords.AnswerDict[pushJpWords.QUESTION_CURRENT_RIGHT_ANSWER.ToString()] + '.' + CurrentWord.headWord, 3000);
                     Thread.Sleep(3000);
                 }
             }

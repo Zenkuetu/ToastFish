@@ -638,6 +638,89 @@ namespace ToastFish.Model.SqliteControl
             }
             return Result;
         }
+
+        /// <summary>
+        /// 当前词库中已经学过（status != 0）的单词数量。
+        /// 随机测试用它做前置判断：一个都没学过就不应该开始测试。
+        /// </summary>
+        public int GetLearnedWordCount()
+        {
+            try
+            {
+                SQLiteCommand cmd = DataBase.CreateCommand();
+                cmd.CommandText = $"SELECT COUNT(*) FROM [{TABLE_NAME}] WHERE status != 0";
+                object v = cmd.ExecuteScalar();
+                if (v == null || v == DBNull.Value)
+                    return 0;
+                return Convert.ToInt32(v);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"GetLearnedWordCount error: {ex.Message}");
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 从当前词库里随机挑 Number 个「已经学过」的英语单词（不放回）。
+        /// 与 GetRandomWords 的区别：只抽 status != 0 的词，避免随机测试抽到没学过的词。
+        /// </summary>
+        public List<Word> GetRandomLearnedWords(int Number)
+        {
+            List<Word> Result = new List<Word>();
+            SelectWordList();
+
+            List<Word> Learned = new List<Word>();
+            foreach (var w in AllWordList)
+            {
+                if (w.status != 0) // 只抽背过的词
+                    Learned.Add(w);
+            }
+
+            if (Learned.Count == 0 || Number <= 0)
+                return Result;
+            if (Learned.Count < Number)
+                Number = Learned.Count;
+
+            Random Rd = _random;
+            for (int i = 0; i < Number; i++)
+            {
+                int Index = Rd.Next(Learned.Count);
+                Result.Add(Learned[Index]);
+                Learned.RemoveAt(Index);
+            }
+            return Result;
+        }
+
+        /// <summary>
+        /// 从当前词库里随机挑 Number 个「已经学过」的日语单词（不放回）。
+        /// </summary>
+        public List<JpWord> GetRandomLearnedJpWords(int Number)
+        {
+            List<JpWord> Result = new List<JpWord>();
+            SelectJpWordList();
+
+            List<JpWord> Learned = new List<JpWord>();
+            foreach (var w in AllJpWordList)
+            {
+                if (w.status != 0) // 只抽背过的词
+                    Learned.Add(w);
+            }
+
+            if (Learned.Count == 0 || Number <= 0)
+                return Result;
+            if (Learned.Count < Number)
+                Number = Learned.Count;
+
+            Random Rd = _random;
+            for (int i = 0; i < Number; i++)
+            {
+                int Index = Rd.Next(Learned.Count);
+                Result.Add(Learned[Index]);
+                Learned.RemoveAt(Index);
+            }
+            return Result;
+        }
         #endregion
 
         #region 五十音部分

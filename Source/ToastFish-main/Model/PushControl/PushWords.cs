@@ -1234,7 +1234,20 @@ namespace ToastFish.Model.PushControl
             int Number = (int)Num;
             Select Query = new Select();
             Query.SelectWordList();
-            List<Word> TestList = Query.GetRandomWords(Number);
+
+            // 2026-10-18：一个词都没学过时不该开始随机测试（旧版会从整本书里抽，包括没学过的词）
+            if (Query.GetLearnedWordCount() == 0)
+            {
+                PushMessage("当前词库还没有学过的单词，先去学一轮再来测试吧");
+                return;
+            }
+
+            List<Word> TestList = Query.GetRandomLearnedWords(Number);
+            if (TestList.Count == 0)
+            {
+                PushMessage("当前词库还没有学过的单词，先去学一轮再来测试吧");
+                return;
+            }
 
             CreateLog Log = new CreateLog();
             String LogName = "Log\\" + DateTime.Now.ToString().Replace('/', '-').Replace(' ', '_').Replace(':', '-') + "_随机英语单词.xlsx";

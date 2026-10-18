@@ -68,6 +68,7 @@ namespace ToastFish
             // 启动后延迟静默检查 GitHub 更新：有新版才弹窗，其余情况完全静默（2026-10-15 新增）
             StartUpdateCheck(false);
 
+
             //this.WindowState = (WindowState)FormWindowState.Minimized;
         }
 
