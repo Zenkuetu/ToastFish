@@ -32,6 +32,12 @@ WizardStyle=modern
 PrivilegesRequired=lowest
 DisableWelcomePage=no
 DisableProgramGroupPage=yes
+; 不弹「这些程序正在使用需要更新的文件」（安装包自带 Python 运行时，
+; 只要有 python.exe 在跑就会把「Python」列进去，而自动关闭经常失败 →
+; 弹出「无法自动关闭所有应用程序」。我们自己按路径结束旧安装目录里的 python，
+; 绝不碰用户自己的 Python，也绝不重启它。
+CloseApplications=no
+RestartApplications=no
 ; 相对路径即可——ISCC 基于 .iss 所在目录解析
 InfoBeforeFile=安装说明.txt
 UninstallDisplayName=ToastFish v{#MyAppVersion}
@@ -226,6 +232,8 @@ Source: "{#SourceRoot}\Resources\generate_dashboard.py"; DestDir: "{app}\Resourc
 Source: "{#SourceRoot}\Resources\essay_api.py"; DestDir: "{app}\Resources"; Flags: ignoreversion; Components: main
 ; 内置 Python 运行时（issue #2：全新电脑没有 Python，仪表盘生成脚本无法执行）
 Source: "{#SourceRoot}\Resources\python\*"; DestDir: "{app}\Resources\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: main
+; 仅供安装过程调用，不安装到 {app}
+Source: "kill_python.ps1"; DestDir: "{tmp}"; Flags: dontcopy deleteafterinstall
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
@@ -246,7 +254,34 @@ var
 begin
   Exec('taskkill', '/F /IM ToastFish.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
+// 上一版登记过的安装目录（未安装过则为空串，去掉末尾反斜杠）
+function PrevInstallDir: String;
+var
+  PrevDir: String;
+begin
+  Result := '';
+  if RegQueryStringValue(HKCU,
+       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1',
+       'InstallLocation', PrevDir) then
+    Result := RemoveBackslashUnlessRoot(PrevDir);
+end;
 
+// 结束旧安装目录下 Resources\python\ 启动的 python 进程。
+// 按可执行文件路径匹配，不会碰用户自己装的 Python（那是另一个目录）。
+procedure KillBundledPython(AppDir: String);
+var
+  ResultCode: Integer;
+  Script: String;
+begin
+  if AppDir = '' then
+    exit;
+  ExtractTemporaryFile('kill_python.ps1');
+  Script := ExpandConstant('{tmp}\kill_python.ps1');
+  Exec('powershell.exe',
+       '-NoProfile -ExecutionPolicy Bypass -File "' + Script + '" "' + AppDir + '"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('KillBundledPython: ' + AppDir + ' (exit ' + IntToStr(ResultCode) + ')');
+end;
 function InitializeSetup: Boolean;
 begin
   Result := True;
@@ -262,6 +297,8 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   KillToastFish;
+  KillBundledPython(ExpandConstant('{app}'));
+  KillBundledPython(PrevInstallDir);
   Result := '';
 end;
 
@@ -274,11 +311,10 @@ begin
   Result := '';
   // 1) 上一版（任何 Inno Setup 版本）登记过的安装目录 —— 最可靠，
   //    用户改过安装位置、或者旧版不在 %LOCALAPPDATA% 时也能找到
-  if RegQueryStringValue(HKCU,
-       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1',
-       'InstallLocation', PrevDir) then
+  PrevDir := PrevInstallDir;
+  if PrevDir <> '' then
   begin
-    PrevDb := AddBackslash(PrevDir) + 'Resources\inami.db';
+    PrevDb := PrevDir + '\Resources\inami.db';
     if FileExists(PrevDb) then
       Result := PrevDb;
   end;
@@ -339,6 +375,7 @@ var
 begin
   if CurStep = ssInstall then
   begin
+    KillBundledPython(ExpandConstant('{app}'));
     IsFirstDbInstall := not FileExists(ExpandConstant('{app}\Resources\inami.db'));
   end;
 
