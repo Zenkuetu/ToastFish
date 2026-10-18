@@ -488,56 +488,65 @@ namespace ToastFish.Model.SqliteControl
         /// <param name="count">需要的词数</param>
         /// <param name="excludeWordRank">排除的词 rank</param>
         /// <param name="targetPos">目标词的词性，用于优先匹配同词性词。可为空</param>
-        public List<Word> GetRandomReviewableWords(int count, int excludeWordRank, string targetPos)
+        public List<Word> GetRandomReviewableWords(int count, int excludeWordRank, string targetPos, string excludeMeaning = null)
         {
             var targetPosParts = ParsePosParts(targetPos);
             var allWords = AllWordList.ToList();
+            var result = new List<Word>();
 
-            // 三级筛选池
-            var pool1 = new List<Word>(); // POS 匹配的已学词
-            var pool2 = new List<Word>(); // 已学词（不限 POS）
-            var pool3 = new List<Word>(); // 全部词（排除自身）
-
-            foreach (var w in allWords)
+            // #107（3.4.4）：先只用「和目标词不同义」的干扰词；
+            // 词库里同义词太多 / 词太少时再放宽（pass 1），否则惊喜复习会直接被跳过。
+            for (int pass = 0; pass < 2 && result.Count < count; pass++)
             {
-                if (w.wordRank == excludeWordRank) continue;
-                if (w.status != 0)
+                bool skipSameMeaning = pass == 0 && !string.IsNullOrWhiteSpace(excludeMeaning);
+
+                // 三级筛选池
+                var pool1 = new List<Word>(); // POS 匹配的已学词
+                var pool2 = new List<Word>(); // 已学词（不限 POS）
+                var pool3 = new List<Word>(); // 全部词（排除自身）
+
+                foreach (var w in allWords)
                 {
-                    if (targetPosParts.Count > 0)
+                    if (w.wordRank == excludeWordRank) continue;
+                    if (result.Any(r => r.wordRank == w.wordRank)) continue;
+                    if (skipSameMeaning && MeaningUtil.SameMeaning(w.tranCN, excludeMeaning)) continue;
+                    if (w.status != 0)
                     {
-                        var candParts = ParsePosParts(w.pos);
-                        if (candParts.Overlaps(targetPosParts))
-                            pool1.Add(w);
+                        if (targetPosParts.Count > 0)
+                        {
+                            var candParts = ParsePosParts(w.pos);
+                            if (candParts.Overlaps(targetPosParts))
+                                pool1.Add(w);
+                            else
+                                pool2.Add(w);
+                        }
                         else
+                        {
                             pool2.Add(w);
+                        }
                     }
                     else
                     {
-                        pool2.Add(w);
+                        pool3.Add(w);
                     }
                 }
+
+                // 按优先级选择：pool1 → pool1+pool2 → pool1+pool2+pool3
+                List<Word> source;
+                if (pool1.Count >= count)
+                    source = pool1;
+                else if (pool1.Count + pool2.Count >= count)
+                    { pool1.AddRange(pool2); source = pool1; }
                 else
+                    { pool1.AddRange(pool2); pool1.AddRange(pool3); source = pool1; }
+
+                int need = Math.Min(count - result.Count, source.Count);
+                for (int i = 0; i < need; i++)
                 {
-                    pool3.Add(w);
+                    int idx = _random.Next(source.Count);
+                    result.Add(source[idx]);
+                    source.RemoveAt(idx);
                 }
-            }
-
-            // 按优先级选择：pool1 → pool1+pool2 → pool1+pool2+pool3
-            List<Word> source;
-            if (pool1.Count >= count)
-                source = pool1;
-            else if (pool1.Count + pool2.Count >= count)
-                { pool1.AddRange(pool2); source = pool1; }
-            else
-                { pool1.AddRange(pool2); pool1.AddRange(pool3); source = pool1; }
-
-            var result = new List<Word>();
-            int actual = Math.Min(count, source.Count);
-            for (int i = 0; i < actual; i++)
-            {
-                int idx = _random.Next(source.Count);
-                result.Add(source[idx]);
-                source.RemoveAt(idx);
             }
             return result;
         }
@@ -635,6 +644,58 @@ namespace ToastFish.Model.SqliteControl
                 int Index = Rd.Next(AllWordArray.Count);
                 Result.Add(AllWordArray[Index]);
                 AllWordArray.RemoveAt(Index);
+            }
+            return Result;
+        }
+
+        /// <summary>
+        /// #107（3.4.4）：挑日语干扰词时排除目标词自身、同拼写，以及和目标词同义的词。
+        /// 旧实现在日语随机测试里直接 GetRandomJpWords(2)，命中同义词时题目就有两个正确答案。
+        /// </summary>
+        public List<JpWord> GetRandomJpWords(int Number, JpWord Exclude)
+        {
+            List<JpWord> Result = new List<JpWord>();
+            SelectJpWordList();
+            var AllWordArray = AllJpWordList.ToList();
+            if (AllWordArray.Count == 0 || Exclude == null)
+                return GetRandomJpWords(Number);
+
+            // 第一轮：不同义
+            List<JpWord> strict = new List<JpWord>();
+            List<JpWord> loose = new List<JpWord>();
+            foreach (var w in AllWordArray)
+            {
+                if (w.wordRank == Exclude.wordRank) continue;
+                if (string.Equals(w.headWord, Exclude.headWord, StringComparison.OrdinalIgnoreCase)) continue;
+                loose.Add(w);
+                if (!MeaningUtil.SameMeaning(w.tranCN, Exclude.tranCN))
+                    strict.Add(w);
+            }
+
+            Random Rd = _random;
+            for (int i = strict.Count - 1; i > 0; i--)
+            {
+                int j = Rd.Next(i + 1);
+                var t = strict[i]; strict[i] = strict[j]; strict[j] = t;
+            }
+            foreach (var w in strict)
+            {
+                if (Result.Count >= Number) break;
+                bool dup = false;
+                foreach (var r in Result)
+                    if (r.wordRank == w.wordRank || MeaningUtil.SameMeaning(r.tranCN, w.tranCN)) { dup = true; break; }
+                if (!dup) Result.Add(w);
+            }
+            // 兜底：凑不够时允许同义，但绝不重复同一个词
+            for (int i = 0; i < loose.Count && Result.Count < Number; i++)
+            {
+                int idx = Rd.Next(loose.Count);
+                var w = loose[idx];
+                loose.RemoveAt(idx);
+                bool dup = false;
+                foreach (var r in Result)
+                    if (r.wordRank == w.wordRank) { dup = true; break; }
+                if (!dup) Result.Add(w);
             }
             return Result;
         }

@@ -183,7 +183,13 @@ namespace ToastFish.Model.PushControl
                 ToastNotificationManagerCompat.History.Clear();
                 Thread.Sleep(500);
                 CurrentWord = pushJpWords.GetRandomWord(RandomList);
-                List<JpWord> FakeWordList = Query.GetRandomJpWords(2);
+                // #107（3.4.4）：干扰词排除同义词，避免题目出现两个正确答案
+                List<JpWord> FakeWordList = Query.GetRandomJpWords(2, CurrentWord);
+                if (FakeWordList.Count < 2)
+                {
+                    RandomList.Remove(CurrentWord);
+                    continue;
+                }
 
                 pushJpWords.PushOneTransQuestion(CurrentWord, FakeWordList[0].headWord, FakeWordList[1].headWord);
 
@@ -253,7 +259,13 @@ namespace ToastFish.Model.PushControl
                 ToastNotificationManagerCompat.History.Clear();
                 Thread.Sleep(500);
                 CurrentWord = pushJpWords.GetRandomWord(TestList);
-                List<JpWord> FakeWordList = Query.GetRandomJpWords(2);
+                // #107（3.4.4）：干扰词排除同义词，避免题目出现两个正确答案
+                List<JpWord> FakeWordList = Query.GetRandomJpWords(2, CurrentWord);
+                if (FakeWordList.Count < 2)
+                {
+                    TestList.Remove(CurrentWord);
+                    continue;
+                }
 
                 pushJpWords.PushOneTransQuestion(CurrentWord, FakeWordList[0].headWord, FakeWordList[1].headWord);
 

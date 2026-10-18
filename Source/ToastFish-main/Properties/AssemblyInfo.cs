@@ -52,5 +52,5 @@ using System.Windows;
 //通过使用 "*"，如下所示:
 // [assembly: AssemblyVersion("1.0.*")]
 // ★ 版本号：必须与 Installer\toastfish.iss 的 #define MyAppVersion 保持一致（发版时两处同步）
-[assembly: AssemblyVersion("3.4.3.0")]
-[assembly: AssemblyFileVersion("3.4.3.0")]
+[assembly: AssemblyVersion("3.4.4.0")]
+[assembly: AssemblyFileVersion("3.4.4.0")]

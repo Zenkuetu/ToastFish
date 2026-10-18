@@ -474,6 +474,67 @@ namespace ToastFish.Model.PushControl
         }
 
         /// <summary>
+        /// #107（3.4.4）：挑选「看释义选单词」的干扰项。
+        /// 旧实现只排除同一个 wordRank，干扰项可能和目标词同义（本机实测 quiver 与 tremble 都译作「颤抖」），
+        /// 那样题目就有两个正确答案，用户选哪个都可能被判错。
+        /// 现在优先挑「和目标词不同义、彼此也不同义」的词；词库太小 / 同义词太多时才放宽到只要求不是同一个词。
+        /// </summary>
+        public List<Word> GetTransQuestionDistractors(Word CurrentWord, List<Word> WordList, int num)
+        {
+            List<Word> picked = new List<Word>();
+            if (CurrentWord == null || WordList == null || num <= 0)
+                return picked;
+
+            Random Rd = new SafeRandom();
+
+            // 第一轮：排除自身、同拼写、与正确释义相同或与已选干扰项同义的词
+            List<Word> strict = new List<Word>();
+            foreach (Word w in WordList)
+            {
+                if (w == null || w.wordRank == CurrentWord.wordRank) continue;
+                if (string.Equals(w.headWord, CurrentWord.headWord, StringComparison.OrdinalIgnoreCase)) continue;
+                if (MeaningUtil.SameMeaning(w.tranCN, CurrentWord.tranCN)) continue;
+                strict.Add(w);
+            }
+            PickDistinctDistractors(strict, num, picked, Rd, true);
+
+            // 兜底：仍然不够（词库太小）时允许同义干扰项，但绝不重复同一个词
+            if (picked.Count < num)
+            {
+                List<Word> loose = new List<Word>();
+                foreach (Word w in WordList)
+                {
+                    if (w == null || w.wordRank == CurrentWord.wordRank) continue;
+                    if (string.Equals(w.headWord, CurrentWord.headWord, StringComparison.OrdinalIgnoreCase)) continue;
+                    loose.Add(w);
+                }
+                PickDistinctDistractors(loose, num, picked, Rd, false);
+            }
+            return picked;
+        }
+
+        private static void PickDistinctDistractors(List<Word> Pool, int num, List<Word> Picked, Random Rd, bool avoidSameMeaning)
+        {
+            // 先洗牌再顺序取，保证随机
+            for (int i = Pool.Count - 1; i > 0; i--)
+            {
+                int j = Rd.Next(i + 1);
+                Word t = Pool[i]; Pool[i] = Pool[j]; Pool[j] = t;
+            }
+            foreach (Word w in Pool)
+            {
+                if (Picked.Count >= num) return;
+                bool dup = false;
+                foreach (Word p in Picked)
+                {
+                    if (p.wordRank == w.wordRank) { dup = true; break; }
+                    if (avoidSameMeaning && MeaningUtil.SameMeaning(p.tranCN, w.tranCN)) { dup = true; break; }
+                }
+                if (!dup) Picked.Add(w);
+            }
+        }
+
+        /// <summary>
         /// #94（3.4.1）：等待用户按键，同时具备自愈能力。
         /// 旧实现是 return await Tcs.Task：如果等待期间弹窗被别的通知顶掉 / 被强行关闭，
         /// 这个 Task 永远不会完成，线程永久阻塞，finally 里的 IsLearningActive = false 也永远不执行，
@@ -1304,7 +1365,13 @@ namespace ToastFish.Model.PushControl
                 // // History.Clear()
                 Thread.Sleep(500);
                 CurrentWord = GetRandomWord(TestList);
-                List<Word> FakeWordList = Query.GetRandomWords(2);
+                // #107：随机测试的干扰项也不能和目标词同义
+                List<Word> FakeWordList = GetTransQuestionDistractors(CurrentWord, (List<Word>)Query.AllWordList, 2);
+                if (FakeWordList.Count < 2)
+                {
+                    TestList.Remove(CurrentWord);
+                    continue;
+                }
 
                 PushOneTransQuestion(CurrentWord, FakeWordList[0].headWord, FakeWordList[1].headWord);
 
@@ -1446,11 +1513,15 @@ namespace ToastFish.Model.PushControl
                 CurrentWord = CopyList[0];
                 List<Word> rndWords;
                 if (RandomList.Count >= 10)
+                    rndWords = GetTransQuestionDistractors(CurrentWord, RandomList, 2);
+                else
+                    rndWords = GetTransQuestionDistractors(CurrentWord, AllWordList, 2);
+
+                // #107：词库小到凑不出两个干扰词时跳过这道题，别让索引越界
+                if (rndWords.Count < 2)
                 {
-                    rndWords = GetRandomWordLst(CurrentWord, RandomList, 2);
-                }
-                {
-                    rndWords = GetRandomWordLst(CurrentWord, AllWordList, 2);
+                    CopyList.RemoveAt(0);
+                    continue;
                 }
 
                 bool result = PushWaitTransQuestion(CurrentWord, rndWords[0].headWord, rndWords[1].headWord);
@@ -2054,7 +2125,12 @@ namespace ToastFish.Model.PushControl
                 for (int i = 0; i < quizCount; i++)
                 {
                     Word cur = pool[rd.Next(pool.Count)]; pool.Remove(cur);
-                    List<Word> fakes = GetRandomWordLst(cur, AllWordList, 2);
+                    // #107：干扰项排除同义词，避免「两个选项都对」
+                    List<Word> fakes = GetTransQuestionDistractors(cur, AllWordList, 2);
+                    if (fakes.Count < 2)
+                    {
+                        continue;
+                    }
                     bool ok = PushWaitTransQuestion(cur, fakes[0].headWord, fakes[1].headWord);
                     if (ok) { Thread.Sleep(500); }
                     else

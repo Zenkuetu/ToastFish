@@ -128,8 +128,9 @@ namespace ToastFish.Model.PushControl
                 Card card = cards[0];
 
                 // 3. 获取 2 个干扰词（优先同词性已学词 → 已学词 → 全库，排除目标词自身）
+                // #107（3.4.4）：排除与目标词同义的干扰词，否则两个选项都对
                 List<Word> distractors = select.GetRandomReviewableWords(
-                    2, card.word.wordRank, card.word.pos);
+                    2, card.word.wordRank, card.word.pos, card.word.tranCN);
                 if (distractors.Count < 2)
                 {
                     System.Diagnostics.Debug.WriteLine("SurpriseReview: 干扰词不足，跳过");

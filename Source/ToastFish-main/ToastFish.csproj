@@ -168,6 +168,7 @@
     <Compile Include="Model\SafeRandom.cs" />
     <Compile Include="Model\UpdateChecker.cs" />
     <Compile Include="Model\UpdateDownloader.cs" />
+    <Compile Include="Model\MeaningUtil.cs" />
     <Compile Include="Model\StartWithWindows\HotKey.cs" />
     <Compile Include="Model\StartWithWindows\StartWithWindows.cs" />
     <Compile Include="Resources\IconChika.Designer.cs">
