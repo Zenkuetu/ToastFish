@@ -75,11 +75,11 @@ BeveledLabel=
 
 ; ============ 1) 欢迎页 ============
 WelcomeLabel1=欢迎使用 [name] 安装向导
-WelcomeLabel2=即将安装 [name/ver] 到你的计算机。%n%n建议在继续前关闭其他应用程序。
+WelcomeLabel2=[name] 是一个常驻系统托盘的背单词工具：按 Alt+Q 弹出单词，按 Alt+1~4 作答，不打断你正在做的事。%n%n接下来会先让你确认几项安装选项，然后复制文件，整个过程约 1 分钟。
 
 ; ============ 2) 信息页（安装手册） ============
 WizardInfoBefore=安装说明
-InfoBeforeLabel=请在继续前仔细阅读以下安装说明：
+InfoBeforeLabel=下面这几行说清了它能干什么、装完怎么开始、遇到安全提示怎么办：
 InfoBeforeClickLabel=我已阅读并理解上述安装说明(&R)
 
 ; ============ 3) 选择安装目录页 ============
@@ -106,8 +106,8 @@ DirDoesntExist=文件夹%n%n%1%n%n不存在。是否创建该文件夹？
 
 ; ============ 4) 选择组件页 ============
 WizardSelectComponents=选择组件
-SelectComponentsDesc=应安装哪些组件？
-SelectComponentsLabel2=勾选要安装的组件，取消勾选不需要的组件。完成后点击「下一步」。
+SelectComponentsDesc=选择要安装的内容
+SelectComponentsLabel2=「主程序」和「词库数据」是必需的 —— 没有词库就没有单词可背。日语五十音发音只有学日语时才需要，可以取消。%n%n选错了也没关系，以后重新运行安装包就能补上。
 FullInstallation=标准安装
 CompactInstallation=最小安装
 CustomInstallation=自定义安装
@@ -119,8 +119,8 @@ NoUninstallWarning=安装程序检测到以下组件已安装：%n%n%1%n%n取消
 
 ; ============ 5) 选择任务页 ============
 WizardSelectTasks=选择附加任务
-SelectTasksDesc=应执行哪些附加任务？
-SelectTasksLabel2=选择安装 [name] 时要执行的附加任务，然后点击「下一步」。
+SelectTasksDesc=几个可选的附加事项
+SelectTasksLabel2=这些都是可选的，安装后也能随时更改。不确定就保持默认，直接点「下一步」。
 
 ; ============ 6) 准备安装页 ============
 WizardReady=准备安装
@@ -140,8 +140,8 @@ InstallingLabel=请稍候，安装程序正在安装 [name] 到你的计算机�
 
 ; ============ 8) 安装完成页 ============
 FinishedHeadingLabel=[name] 安装完成
-FinishedLabel=安装程序已在你的计算机上完成 [name] 的安装。可以通过开始菜单或桌面快捷方式启动。
-FinishedLabelNoIcons=安装程序已在你的计算机上完成 [name] 的安装。
+FinishedLabel=[name] 已经装好了。%n%n接下来：%n1. 程序不会弹出主窗口，而是缩到任务栏右下角的系统托盘（找不到就点任务栏的 ^ 展开）%n2. 按 Alt+Q 开始学习，按 Alt+1~4 选择记忆程度%n3. 右键点击托盘图标，可以使用全部功能%n%n第一次使用，建议先看「使用说明」。
+FinishedLabelNoIcons=[name] 已经装好了。到「开始菜单 → ToastFish」启动它。%n%n程序会缩到任务栏右下角的系统托盘，按 Alt+Q 开始学习，按 Alt+1~4 作答。
 ClickFinish=点击「完成」退出安装向导。
 RunEntryExec=运行 %1
 RunEntryShellExec=查看 %1
@@ -190,18 +190,18 @@ UninstallDataCorrupted="%1" 文件已损坏，无法卸载。
 
 [Types]
 Name: "full"; Description: "标准安装（推荐）"
-Name: "compact"; Description: "最小安装（仅主程序）"
+Name: "compact"; Description: "最小安装（仅主程序，不含词库）"
 Name: "custom"; Description: "自定义安装"; Flags: iscustom
 
 [Components]
 Name: "main"; Description: "主程序（必需）"; Types: full compact custom; Flags: fixed
-Name: "db"; Description: "单词数据库 (inami.db, ~22 MB)"; Types: full custom; ExtraDiskSpaceRequired: 23592960
-Name: "audio"; Description: "日语五十音发音文件 (104 个 MP3)"; Types: full; ExtraDiskSpaceRequired: 5406720
+Name: "db"; Description: "词库数据（约 22 MB：英语 16 套 + 日语；不装就没有单词可背）"; Types: full custom; ExtraDiskSpaceRequired: 23592960
+Name: "audio"; Description: "日语五十音发音（104 个 MP3，只学英语可以取消勾选）"; Types: full; ExtraDiskSpaceRequired: 5406720
 
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "额外快捷方式:"; Flags: checkedonce
-Name: "launchafter"; Description: "安装完成后启动 ToastFish"; GroupDescription: "其他:"
-Name: "migratedata"; Description: "导入旧版 ToastFish 学习数据（保留学习进度和记录）"; GroupDescription: "数据迁移:"; Flags: unchecked
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: checkedonce
+Name: "launchafter"; Description: "安装完成后立即启动 ToastFish"; GroupDescription: "其他："
+Name: "migratedata"; Description: "从旧版本导入学习进度（仅升级用户需要）"; GroupDescription: "数据迁移："; Flags: unchecked
 
 [Files]
 ; 主程序
@@ -240,7 +240,7 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingD
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "启动 ToastFish"; Flags: nowait postinstall skipifsilent; Tasks: launchafter
+Filename: "{app}\{#MyAppExeName}"; Description: "立即启动 ToastFish"; Flags: nowait postinstall skipifsilent; Tasks: launchafter
 
 [Code]
 var

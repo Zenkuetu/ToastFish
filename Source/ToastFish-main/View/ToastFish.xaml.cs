@@ -1037,7 +1037,18 @@ namespace ToastFish
         }
         private void ShortCuts_Click(object sender, EventArgs e)
         {
-            System.Windows.Forms.MessageBox.Show("ALT+Q     ：开始内置单词学习\nALT+H     ：隐藏/显示学习弹窗\nALT+~     ：英语单词发音\nALT+1到4：对应点击按钮1到4", "版本号：2.3.3");
+            System.Windows.Forms.MessageBox.Show(
+                "Alt+Q     开始一轮学习（再按一次暂停 / 恢复）" + "\n" +
+                "Alt+1     没印象（Again）" + "\n" +
+                "Alt+2     模糊（Hard）" + "\n" +
+                "Alt+3     记住（Good）" + "\n" +
+                "Alt+4     牢记（Easy）" + "\n" +
+                "Alt+~     重播当前单词发音" + "\n" +
+                "Alt+H     显示 / 隐藏当前弹窗" + "\n" +
+                "按住 Alt   把当前弹窗等比放大一倍（松开还原）" + "\n\n" +
+                "不想用键盘时，直接点击弹窗上的按钮也一样。" + "\n" +
+                "弹窗右上角的 A+ 小图标可以关掉「按住 Alt 放大」。",
+                "ToastFish 快捷键");
         }
 
         private void AutoPlay_Click(object sender, EventArgs e)
@@ -1259,7 +1270,7 @@ namespace ToastFish
 
         private void HowToUse_Click(object sender, EventArgs e)
         {
-            OpenWithBrowser(".\\Resources\\使用说明.html");
+            OpenWithBrowser(PathHelper.ExeDir + @"\Resources\使用说明.html");
         }
         private void Dashboard_Click(object sender, EventArgs e)
         {
@@ -1330,7 +1341,7 @@ namespace ToastFish
         }
         private void OpenPdf_Click(object sender, EventArgs e)
         {
-            OpenWithBrowser(".\\Resources\\Star.pdf");
+            OpenWithBrowser(PathHelper.ExeDir + @"\Resources\Star.pdf");
         }
         private void ExitApp_Click(object sender, EventArgs e)
         {
