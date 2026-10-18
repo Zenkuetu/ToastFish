@@ -7,7 +7,7 @@
 ; ★ 版本号唯一来源（Single Source of Truth）—— 发版时只改这一行，
 ;   build-installer.ps1 会读取它推导安装包文件名，VersionInfoVersion 由它拼接。
 ;   同步项：Source\ToastFish-main\Properties\AssemblyInfo.cs 的 AssemblyVersion/AssemblyFileVersion
-#define MyAppVersion "3.4.4"
+#define MyAppVersion "3.4.2"
 #define MyAppVersion4 MyAppVersion + ".0"
 #define MyAppPublisher "ToastFish"
 #define MyAppExeName "ToastFish.exe"

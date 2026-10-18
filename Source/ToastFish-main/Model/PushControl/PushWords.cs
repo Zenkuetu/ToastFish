@@ -66,6 +66,7 @@ namespace ToastFish.Model.PushControl
 
         public static void RequestAbortRound() { RoundAbort = true; }
 
+
         /// <summary>测试模式：本轮学习结束后自动恢复数据库，不保存学习记录。</summary>
         public static volatile bool TestMode = false;
 
@@ -552,7 +553,14 @@ namespace ToastFish.Model.PushControl
                     case "4": Ans = 3; break;
                 }
                 if (Ans >= 0)
+                {
                     Tcs.TrySetResult(Ans == QUESTION_CURRENT_RIGHT_ANSWER ? 1 : 0);
+                    // #98（3.4.2）：热键作答后立刻关掉这道题的弹窗。
+                    // 原来要等下一题出来才关（中间还有 0.3~3.5 秒的 Sleep），这段空档里
+                    // 题目还挂在屏幕上但已经没有订阅者了，用户再按 ALT+2 会被静默丢弃，
+                    // 看起来就像「按了没反应」。答完就消失，视觉上也不会再误导。
+                    NotificationForm.CloseCurrent();
+                }
             }))
             {
                 return Task.FromResult(AwaitAnswer(Tcs, -1));  // #94：弹窗人间蒸发时跳过此题，别把整轮测试卡死

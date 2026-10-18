@@ -1,4 +1,4 @@
-﻿using Microsoft.Toolkit.Uwp.Notifications;
+using Microsoft.Toolkit.Uwp.Notifications;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -71,6 +71,7 @@ namespace ToastFish
 
             //this.WindowState = (WindowState)FormWindowState.Minimized;
         }
+
 
         private void OnHotKeyHandler(HotKey hotKey)
         {
