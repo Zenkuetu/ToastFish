@@ -1,4 +1,4 @@
-﻿﻿; ToastFish Inno Setup 安装脚本
+﻿; ToastFish Inno Setup 安装脚本
 ; 编译器: ISCC.exe (Inno Setup 6.7+)
 ; 运行: "ISCC.exe" toastfish.iss
 ; 说明: 本脚本内所有路径均为相对 .iss 所在目录（Installer\），克隆到任意位置都能编译。
