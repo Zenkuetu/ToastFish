@@ -67,8 +67,6 @@ namespace ToastFish
 
             // 启动后延迟静默检查 GitHub 更新：有新版才弹窗，其余情况完全静默（2026-10-15 新增）
             StartUpdateCheck(false);
-
-
             //this.WindowState = (WindowState)FormWindowState.Minimized;
         }
 
@@ -140,11 +138,30 @@ namespace ToastFish
             //Vm.notifyIcon.DoubleClick += NotifyIconDoubleClick;
         }
 
+        /// <summary>
+        /// 预热音频设备（不播这一段，后面什么声音都播不出来）。
+        /// #105：绝不能放在 UI 线程上 —— 某些声卡/驱动下 mciSendString("play media wait") 会永久阻塞，
+        /// 把 UI 线程整个卡死（表现为托盘图标左右键都没反应、ALT+Q 热键失效、只能重启程序）。
+        /// 这里丢到后台线程，卡住也只卡这一条线程，主界面/托盘/热键不受影响。
+        /// </summary>
         public void PlayMute()
         {
-            MUSIC Temp = new MUSIC();
-            Temp.FileName = ".\\Resources\\mute.mp3";
-            Temp.play();
+            System.Threading.Thread th = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    MUSIC Temp = new MUSIC();
+                    Temp.FileName = PathHelper.ExeDir + @"\Resources\mute.mp3";
+                    Temp.play();
+                }
+                catch
+                {
+                    // 预热失败不影响任何功能，静默忽略
+                }
+            });
+            th.IsBackground = true;
+            th.Priority = System.Threading.ThreadPriority.BelowNormal;
+            th.Start();
         }
 
         private void NotifyIconDoubleClick(object sender, EventArgs e)
