@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -3024,6 +3026,75 @@ form.PlaceBottomRight();
         private Size _zoomAutoScroll;
         private System.Windows.Forms.Timer _zoomTimer;
 
+        // ===== 弹窗启动日志（2026-10-18 新增）=====
+        // 每张弹窗真正显示（ShowAsCurrent）时往 <exe>\Log\popup.log 追加一行，
+        // 记录标题 / 尺寸 / 位置 / 超时 / 是否交互型 / 调用方方法。排「某个弹窗什么时候弹的、从哪弹的」时直接看这个文件。
+        // 写日志的异常一律吞掉（磁盘满 / 只读目录 / 被占用都不能影响弹窗）。
+
+        /// <summary>弹窗日志所在的相对目录（与 Excel 学习日志同在 Log\ 下）</summary>
+        public const string PopupLogDir = "Log";
+        /// <summary>弹窗日志文件名</summary>
+        public const string PopupLogName = "popup.log";
+        /// <summary>单个日志文件上限，超过就轮转成 popup.log.1（只留 1 份旧文件）</summary>
+        private const long PopupLogMaxBytes = 2L * 1024 * 1024;
+        private static readonly object PopupLogLock = new object();
+
+        /// <summary>弹窗日志的绝对路径（&lt;exe 目录&gt;\Log\popup.log）</summary>
+        public static string PopupLogPath
+        {
+            get { return Path.Combine(Path.Combine(PathHelper.ExeDir, PopupLogDir), PopupLogName); }
+        }
+
+        /// <summary>
+        /// 向弹窗日志追加一行：<c>2026-10-18 14:40:01.123 [OPEN] ...</c>。
+        /// 线程安全、自动建目录、超过 2MB 自动轮转；任何异常都静默忽略。
+        /// </summary>
+        public static void LogPopup(string tag, string message)
+        {
+            try
+            {
+                string dir = Path.Combine(PathHelper.ExeDir, PopupLogDir);
+                Directory.CreateDirectory(dir);
+                string path = Path.Combine(dir, PopupLogName);
+                string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [" + tag + "] " + message + "\r\n";
+                lock (PopupLogLock)
+                {
+                    try
+                    {
+                        var fi = new FileInfo(path);
+                        if (fi.Exists && fi.Length > PopupLogMaxBytes)
+                        {
+                            string old = path + ".1";
+                            if (File.Exists(old)) File.Delete(old);
+                            File.Move(path, old);
+                        }
+                    }
+                    catch { }
+                    File.AppendAllText(path, line, Encoding.UTF8);
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>取调用方方法名（跳过 PopupForm 自己的日志/显示方法），便于知道是哪个弹窗弹的</summary>
+        private static string CallerName()
+        {
+            try
+            {
+                var st = new System.Diagnostics.StackTrace(2, false);
+                for (int i = 0; i < st.FrameCount; i++)
+                {
+                    var mi = st.GetFrame(i).GetMethod();
+                    if (mi == null || mi.DeclaringType == null) continue;
+                    string name = mi.Name;
+                    if (name == "LogPopup" || name == "CallerName" || name == "ShowAsCurrent" || name == ".ctor") continue;
+                    return mi.DeclaringType.Name + "." + name;
+                }
+            }
+            catch { }
+            return "?";
+        }
+
         public PopupForm(int width, int height, string title = "ToastFish",
                          Color? back = null, Color? fore = null,
                          Font font = null, int margin = DefaultEdge)
@@ -3104,6 +3175,17 @@ form.PlaceBottomRight();
             if (suppressSpaceEnter) NotificationForm.SuppressSpaceEnterKeys(this);
             NotificationForm.Hidden = false;
             NotificationForm.Current = this;
+
+            // 启动日志：真正显示时才写，此时尺寸/位置已经排布完毕
+            var ps = Tag as NotificationForm.PopupState;
+            LogPopup("OPEN",
+                "caller=" + CallerName()
+                + " title=\"" + Text + "\""
+                + " size=" + Width + "x" + Height
+                + " pos=" + Left + "," + Top
+                + " timeout=" + (ps != null && ps.TotalMs > 0 ? ps.TotalMs + "ms" : "none")
+                + " interactive=" + (ps != null ? ps.Interactive.ToString() : "unknown"));
+
             Show();
         }
 
