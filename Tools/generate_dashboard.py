@@ -457,10 +457,34 @@ def compute_page2(studylog, words):
             rhythm_matrix.append(row)
 
     # --- 顽固词 Top 15 ---
-    # 旧实现按 status != 5 过滤，但本作 status=5 就是 Reviewed（已学完），
-    # 已学词几乎全为 5，榜单恒空。改为"最近一次没通过（< Good）或仍在学习/重学阶段"。
-    lapsed = [w for w in words if w['lastScore'] < 0.8 or w['status'] != 5]
-    hard_words = sorted(lapsed, key=lambda x: (-x['difficulty'], x['daysBetweenReviews']))[:15]
+    # 判定标准（2026-10-18 放宽）。本作 status=5 就是 Reviewed（已学完），已学词几乎全为 5；
+    # Good=0.8 又恰好是"勉强通过"，绝大多数词的 lastScore 就是 0.8/1.0 —— 旧标准
+    # `lastScore < 0.8 or status != 5` 因此经常一个都选不出来（尤其是只有 0.8/1.0 的词库）。
+    # 现在改成"失败 or （勉强通过 + 另一个变难信号）"，既不会空、也不至于把一半词都算成顽固：
+    #   ① 最近一次 < 0.80（Hard / Again）—— 直接失败；
+    #   ② 最近一次 < 0.90（只是 Good）且 难度 ≥ 0.30 或 间隔 ≤ 7 天 —— 勉强通过，但确实难/刚被打回；
+    #   ③ 难度 ≥ 0.45 —— 极难词，即使拿了 Easy 也值得盯；
+    #   ④ status != 5 —— 仍在学习 / 重学阶段。
+    # 排序用"顽固度"而不是单看难度，否则评分 0.4 但难度 0.1 的词永远排不进来。
+    STUBBORN_FAIL = 0.8
+    STUBBORN_WEAK = 0.9
+    STUBBORN_DIFF = 0.3
+    STUBBORN_INTERVAL = 7.0
+    STUBBORN_HARD = 0.45
+    def _is_stubborn(w):
+        if w['status'] != 5:
+            return True
+        if w['lastScore'] < STUBBORN_FAIL:
+            return True
+        if w['lastScore'] < STUBBORN_WEAK and (w['difficulty'] >= STUBBORN_DIFF
+                                               or w['daysBetweenReviews'] <= STUBBORN_INTERVAL):
+            return True
+        return w['difficulty'] >= STUBBORN_HARD
+    def _severity(w):
+        # 0.6 权重给评分（失败程度），0.4 给难度（0.5 封顶，难度本身罕见超过它）
+        return (1.0 - w['lastScore']) * 0.6 + min(1.0, w['difficulty'] / 0.5) * 0.4
+    lapsed = [w for w in words if _is_stubborn(w)]
+    hard_words = sorted(lapsed, key=lambda x: (-_severity(x), x['daysBetweenReviews']))[:15]
     hard_list = [{
         'word': w['headWord'],
         'pos': w.get('pos') or '',

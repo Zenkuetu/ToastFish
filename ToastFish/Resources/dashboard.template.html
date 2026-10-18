@@ -2277,7 +2277,7 @@ const PageAcademic = {
         <table class="word-table">
           <thead><tr><th>#</th><th>单词</th><th>释义</th><th>难度</th><th>间隔</th><th>Score</th></tr></thead>
           <tbody>
-            <tr v-if="!d.hardWords.length"><td colspan="6" style="color:var(--text-dim);text-align:center;padding:18px 0;">本词库暂无顽固词（最近一次评分均 ≥ 80%）</td></tr>
+            <tr v-if="!d.hardWords.length"><td colspan="6" style="color:var(--text-dim);text-align:center;padding:18px 0;">本词库暂无顽固词（评分均 ≥ 90%、难度均 &lt; 0.30、间隔均 &gt; 7 天，且全部已学完）</td></tr>
             <tr v-for="(w, i) in d.hardWords" :key="w.word">
               <td style="color:var(--text-dim);">{{ i + 1 }}</td>
               <td class="word-col">{{ w.word }}</td>
@@ -2288,6 +2288,7 @@ const PageAcademic = {
             </tr>
           </tbody>
         </table>
+        <p class="citation" style="margin-top:8px;">判定：最近一次评分 &lt; 80%（Hard / Again）· 或 评分 &lt; 90%（只是 Good）且 难度 ≥ 0.30 或 间隔 ≤ 7 天 · 或 难度 ≥ 0.45 · 或 仍在学习/重学阶段 —— 按「顽固度」（评分 60% + 难度 40%）取前 15</p>
       </div>
     </div>
   </section>
