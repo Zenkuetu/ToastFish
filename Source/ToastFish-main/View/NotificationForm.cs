@@ -58,7 +58,34 @@ namespace ToastFish.View
 
         // #96（3.4.3）：浮层提示必须避开答题弹窗。#94 的"简单上移 180px"会正好压在题目/选项上，
         // 用户看着像"提示把题目盖住了"。这里按 正上方 → 左侧 → 下方 依次找空位，并叠开多条提示。
-        private static Form _lastOverlay;
+        private static readonly List<Form> _overlayForms = new List<Form>();
+
+        /// <summary>#97：取最后一个还活着的提示浮层（顺带清理已销毁的引用）。</summary>
+        private static Form LastLiveOverlay()
+        {
+            for (int i = _overlayForms.Count - 1; i >= 0; i--)
+            {
+                var f = _overlayForms[i];
+                if (f == null || f.IsDisposed) _overlayForms.RemoveAt(i);
+            }
+            return _overlayForms.Count > 0 ? _overlayForms[_overlayForms.Count - 1] : null;
+        }
+
+        /// <summary>
+        /// #97（3.4.4）：新的答题/阅读弹窗出现前，先把还在飘的提示消息关掉。
+        /// 否则「背完了！接下来开始测验…」这类提示会和紧接着弹出的测验窗同时存在、叠在一起。
+        /// </summary>
+        private static void CloseMessageOverlays()
+        {
+            if (_overlayForms.Count == 0) return;
+            var alive = new List<Form>(_overlayForms);
+            _overlayForms.Clear();
+            foreach (var f in alive)
+            {
+                if (f == null || f.IsDisposed) continue;
+                try { f.Close(); } catch { }
+            }
+        }
 
         private static void PlaceOverlay(Form form, Rectangle wa)
         {
@@ -70,8 +97,7 @@ namespace ToastFish.View
                 return;
             }
 
-            while (_lastOverlay != null && _lastOverlay.IsDisposed) _lastOverlay = null;
-            var baseForm = (_lastOverlay != null && !_lastOverlay.IsDisposed) ? _lastOverlay : host;
+            var baseForm = LastLiveOverlay() ?? host;
 
             int w = form.Width, h = form.Height;
             int left = baseForm.Right - w;      // 与目标右对齐
@@ -188,6 +214,7 @@ namespace ToastFish.View
             // BeginInvoke 异步排队，不阻塞当前线程（避免启动时短暂未响应）
             dispatcher.BeginInvoke(new Action(() =>
             {
+                CloseMessageOverlays();
                 _current?.Close();
                 _current?.Dispose();
 
@@ -379,6 +406,7 @@ namespace ToastFish.View
             {
                 // 不关闭当前弹窗（惊喜复习弹窗本身就是当前弹窗，由 ProcessAnswer 在回调中关闭）
                 // 但如果已有预览弹窗，先关掉旧的
+                CloseMessageOverlays();
                 _current?.Close();
                 _current?.Dispose();
 
@@ -548,6 +576,7 @@ namespace ToastFish.View
                 bool overlay = IsLiveInteractiveUnanswered();
                 if (!overlay)
                 {
+                    CloseMessageOverlays();
                     _current?.Close();
                     _current?.Dispose();
                 }
@@ -595,7 +624,7 @@ namespace ToastFish.View
                 {
                     // 浮层不接管 _current，关掉它不能影响正在等按键的弹窗状态
                     if (_current == form) { _current = null; _isHidden = false; }
-                    if (_lastOverlay == form) _lastOverlay = null;
+                    _overlayForms.Remove(form);
                     form.Dispose();
                     timer.Dispose();
                 };
@@ -607,7 +636,7 @@ namespace ToastFish.View
                 }
                 else
                 {
-                    _lastOverlay = form;
+                    _overlayForms.Add(form);
                 }
                 form.Show();
             }));
@@ -622,6 +651,7 @@ namespace ToastFish.View
 
             dispatcher.BeginInvoke(new Action(() =>
             {
+                CloseMessageOverlays();
                 _current?.Close();
                 _current?.Dispose();
 
@@ -722,6 +752,7 @@ namespace ToastFish.View
 
             dispatcher.BeginInvoke(new Action(() =>
             {
+                CloseMessageOverlays();
                 _current?.Close();
                 _current?.Dispose();
 
@@ -915,6 +946,7 @@ namespace ToastFish.View
 
             dispatcher.BeginInvoke(new Action(() =>
             {
+                CloseMessageOverlays();
                 _current?.Close();
                 _current?.Dispose();
 
@@ -1118,6 +1150,7 @@ namespace ToastFish.View
             Action<int> callback, int timeoutMs)
         {
             // 关闭上一个弹窗（测验弹窗等）
+            CloseMessageOverlays();
             _current?.Close();
             _current?.Dispose();
 
@@ -1247,6 +1280,7 @@ namespace ToastFish.View
 
             dispatcher.BeginInvoke(new Action(() =>
             {
+                CloseMessageOverlays();
                 _current?.Close();
                 _current?.Dispose();
 
@@ -1728,6 +1762,7 @@ namespace ToastFish.View
 
             dispatcher.BeginInvoke(new Action(() =>
             {
+                CloseMessageOverlays();
                 _current?.Close();
                 _current?.Dispose();
 

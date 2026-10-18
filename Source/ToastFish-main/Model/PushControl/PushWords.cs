@@ -1082,7 +1082,8 @@ namespace ToastFish.Model.PushControl
             }
             if (RandomList.Count > 0)
             {
-                pushWords.PushMessage("背完了！接下来开始测验记忆模糊的单词！");
+                // #97（3.4.4）：这条提示原本紧接着就是测验弹窗，两块弹窗会叠在一起（提示压住题目/选项）。
+                // 测验弹窗本身已经足够说明「接下来开始测验」，这里不再单独提示。
                 pushWords.PushWaitAllQuestions(RandomList, (List<Word>)Query.AllWordList);
             }
 
