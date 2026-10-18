@@ -441,6 +441,7 @@ namespace ToastFish
 
         /// <summary>
         /// 检查 GitHub 是否有新版本。
+        /// 2026-10-18（3.4.3）起改成「一键更新」：确认后**直接下载安装包 → 静默安装 → 自动重启**，不再跳浏览器。
         /// manual=false：启动后延迟 15 秒静默检查，无更新 / 检查失败 / 正在学习或已有弹窗时什么都不做；
         /// manual=true：用户点「检查更新」，无更新或失败时给一次性提示。
         /// 任何异常都在此吞掉——更新检查绝不能干扰学习主流程。
@@ -469,16 +470,164 @@ namespace ToastFish
                     // 自动检查时避开学习进行中 / 已有弹窗，避免抢屏或误关当前弹窗
                     if (!manual && (PushWords.IsLearningActive || NotificationForm.Current != null)) return;
 
-                    var task = NotificationForm.ShowWithButtons("检查更新",
-                        "发现新版本 " + info.Tag + "（当前 v" + Model.UpdateChecker.CurrentVersionString + "），是否前往下载？",
-                        new[] { "前往下载", "稍后再说" }, 30000);
-                    if (task.Wait(35000) && task.Result == 0)
+                    bool hasAsset = info.HasAsset;
+                    string prompt = "发现新版本 " + info.Tag + "（当前 v" + Model.UpdateChecker.CurrentVersionString + "）。";
+                    prompt += hasAsset
+                        ? "是否立即更新？\n确认后会直接下载并安装，装完自动重启 ToastFish。"
+                        : "是否前往 GitHub 下载？";
+
+                    var task = NotificationForm.ShowWithButtons("检查更新", prompt,
+                        hasAsset ? new[] { "立即更新", "稍后再说" } : new[] { "前往下载", "稍后再说" },
+                        NotificationForm.TIMEOUT_DIALOG);
+                    if (!(task.Wait(NotificationForm.TIMEOUT_DIALOG + 5000) && task.Result == 0)) return;
+
+                    if (!hasAsset)
                     {
+                        // Release 里没有安装包附件 → 退回旧行为，打开浏览器
                         try { Process.Start(info.Url); } catch { }
+                        return;
+                    }
+
+                    RunOneClickUpdate(info);
+                }
+                catch (Exception ex)
+                {
+                    try { PopupForm.LogPopup("UPDATE", "检查更新异常：" + ex.Message); } catch { }
+                }
+            });
+        }
+
+        /// <summary>
+        /// 一键更新（#104 / 3.4.3）：下载安装包 → 写一个「等本进程退出后静默安装并重启」的 PowerShell 脚本 → 关闭自己。
+        /// 失败时弹窗说明原因，并提供「前往下载页」手动兜底。整段跑在后台线程，绝不阻塞 UI。
+        /// </summary>
+        private void RunOneClickUpdate(Model.UpdateChecker.UpdateInfo info)
+        {
+            string workDir = Path.Combine(Path.GetTempPath(), "ToastFishUpdate");
+            string fileName = string.IsNullOrEmpty(info.AssetName) ? "ToastFish-Setup.exe" : info.AssetName;
+            string setupPath = Path.Combine(workDir, fileName);
+
+            try
+            {
+                if (Directory.Exists(workDir)) Directory.Delete(workDir, true);   // 清掉上一次的残留
+            }
+            catch { }
+            try { Directory.CreateDirectory(workDir); }
+            catch (Exception ex)
+            {
+                ShowUpdateFailed(info, "无法创建临时目录：" + ex.Message);
+                return;
+            }
+
+            var popup = NotificationForm.ShowProgressPopup("更新 ToastFish",
+                "正在连接更新服务器…（" + info.Tag + "）");
+
+            Model.UpdateDownloader.Result result = null;
+            try
+            {
+                result = Model.UpdateDownloader.Download(info.AssetUrl, info.AssetApiUrl, setupPath,
+                    (done, total, text) =>
+                    {
+                        int pct = total > 0 ? (int)(done * 100 / total) : -1;
+                        popup.Report(pct, text);
+                    },
+                    null);
+            }
+            catch (Exception ex)
+            {
+                result = new Model.UpdateDownloader.Result { Ok = false, Error = ex.Message };
+            }
+
+            popup.Close();
+
+            if (result == null || !result.Ok)
+            {
+                string reason = result == null ? "未知错误" : result.Error;
+                ShowUpdateFailed(info, reason);
+                return;
+            }
+
+            try
+            {
+                string installDir = GetInstallDir();
+                string exePath = Path.Combine(installDir, "ToastFish.exe");
+                string logPath = Path.Combine(workDir, "install.log");
+                string scriptPath = Path.Combine(workDir, "apply_update.ps1");
+
+                string script = Model.UpdateDownloader.BuildApplyScript(setupPath, exePath, logPath);
+                File.WriteAllText(scriptPath, script, new System.Text.UTF8Encoding(true));   // 带 BOM：PowerShell 才按 UTF-8 解析中文路径
+
+                var psi = new ProcessStartInfo("powershell.exe",
+                    "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + scriptPath + "\"")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    WorkingDirectory = workDir
+                };
+                Process.Start(psi);
+                try { PopupForm.LogPopup("UPDATE", "一键更新开始：" + info.Tag + " setup=" + setupPath + " installDir=" + installDir); } catch { }
+
+                // 安装脚本会先等 2 秒再 taskkill 本进程；这里主动退出，让安装包能覆盖 ToastFish.exe
+                var dispatcher = PushWords.UIDispatcher;
+                if (dispatcher != null) dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { System.Windows.Application.Current.Shutdown(); } catch { }
+                }));
+            }
+            catch (Exception ex)
+            {
+                ShowUpdateFailed(info, "启动安装程序失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>更新失败的统一提示：说明原因 + 提供「前往下载页」手动兜底</summary>
+        private void ShowUpdateFailed(Model.UpdateChecker.UpdateInfo info, string reason)
+        {
+            try { PopupForm.LogPopup("UPDATE", "更新失败：" + reason); } catch { }
+            string msg = "下载新版本失败：" + reason + "\n\n可以稍后重试，或前往 GitHub 手动下载。";
+            try
+            {
+                var t = NotificationForm.ShowWithButtons("更新失败", msg, new[] { "前往下载页", "关闭" }, 60000);
+                if (t.Wait(65000) && t.Result == 0)
+                {
+                    try { Process.Start(info.Url); } catch { }
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 当前安装目录：优先读安装器写的卸载注册表项 InstallLocation，
+        /// 读不到就退回「本进程 exe 所在目录」（便携运行时也对）。
+        /// </summary>
+        private static string GetInstallDir()
+        {
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1"))
+                {
+                    if (key != null)
+                    {
+                        string loc = key.GetValue("InstallLocation") as string;
+                        if (!string.IsNullOrEmpty(loc))
+                        {
+                            loc = loc.TrimEnd('\\');
+                            if (loc.Length > 0) return loc;
+                        }
                     }
                 }
-                catch { }
-            });
+            }
+            catch { }
+
+            try
+            {
+                string exe = System.Reflection.Assembly.GetEntryAssembly().Location;
+                if (!string.IsNullOrEmpty(exe)) return Path.GetDirectoryName(exe);
+            }
+            catch { }
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ToastFish");
         }
 
         private void Begin_Click(object sender, EventArgs e)

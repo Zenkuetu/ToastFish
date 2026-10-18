@@ -644,6 +644,141 @@ namespace ToastFish.View
             }));
         }
 
+        // ── #104（3.4.3）：下载进度浮层 ──
+        /// <summary>
+        /// 下载新版本时显示的进度浮层。它**不接管 _current、也不关闭任何弹窗**，只作为 overlay 存在：
+        /// 学习轮次进行中手动点「检查更新」也不会打断正在答题的弹窗。
+        /// Report / Close 可以从后台线程调用（内部切回 UI 线程）。
+        /// </summary>
+        public sealed class ProgressPopup
+        {
+            private readonly Form _form;
+            private readonly Label _label;
+            private readonly ProgressBar _bar;
+            private volatile bool _closed;
+
+            internal ProgressPopup(Form form, Label label, ProgressBar bar)
+            {
+                _form = form;
+                _label = label;
+                _bar = bar;
+            }
+
+            /// <summary>更新进度；percent &lt; 0 表示总长度未知（进度条走跑马灯）</summary>
+            public void Report(int percent, string text)
+            {
+                if (_closed || _form == null) return;
+                var dispatcher = Model.PushControl.PushWords.UIDispatcher;
+                if (dispatcher == null) return;
+                dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_closed || _form.IsDisposed) return;
+                    try
+                    {
+                        if (percent < 0)
+                        {
+                            if (_bar.Style != ProgressBarStyle.Marquee) _bar.Style = ProgressBarStyle.Marquee;
+                        }
+                        else
+                        {
+                            if (_bar.Style != ProgressBarStyle.Continuous) _bar.Style = ProgressBarStyle.Continuous;
+                            int v = percent > 100 ? 100 : percent;
+                            _bar.Value = v < 0 ? 0 : v;
+                        }
+                        _label.Text = text ?? "";
+                    }
+                    catch { }
+                }));
+            }
+
+            /// <summary>关闭浮层（幂等，可从任意线程调用）</summary>
+            public void Close()
+            {
+                if (_closed) return;
+                _closed = true;
+                var dispatcher = Model.PushControl.PushWords.UIDispatcher;
+                if (dispatcher == null)
+                {
+                    try { if (_form != null) _form.Close(); } catch { }
+                    return;
+                }
+                dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (_form == null) return;
+                        _overlayForms.Remove(_form);
+                        _form.Close();
+                    }
+                    catch { }
+                }));
+            }
+        }
+
+        /// <summary>
+        /// 显示「正在下载更新」的进度浮层，返回可更新的句柄。没有 UI 线程时返回空句柄（不会崩）。
+        /// </summary>
+        public static ProgressPopup ShowProgressPopup(string title, string initialText)
+        {
+            var dispatcher = Model.PushControl.PushWords.UIDispatcher;
+            if (dispatcher == null) return new ProgressPopup(null, null, null);
+
+            ProgressPopup result = null;
+            dispatcher.Invoke(new Action(() =>
+            {
+                CloseMessageOverlays();   // 先收掉还在飘的提示，避免三层叠在一起
+                var form = new PopupForm(460, 154, title, font: new Font("Microsoft YaHei UI", 12), margin: 16);
+
+                var wa = Screen.PrimaryScreen.WorkingArea;
+                form.PlaceBottomRight(wa);
+
+                var titleLabel = new Label
+                {
+                    Text = title,
+                    ForeColor = Color.FromArgb(136, 136, 136),
+                    Font = new Font("Microsoft YaHei UI", 9),
+                    Location = new Point(16, 12),
+                    AutoSize = true
+                };
+                form.Controls.Add(titleLabel);
+
+                var textLabel = new Label
+                {
+                    Text = initialText ?? "",
+                    ForeColor = Color.White,
+                    Font = new Font("Microsoft YaHei UI", 11),
+                    Location = new Point(16, 36),
+                    MaximumSize = new Size(420, 44),
+                    AutoSize = false,
+                    Size = new Size(420, 44)
+                };
+                form.Controls.Add(textLabel);
+
+                var bar = new ProgressBar
+                {
+                    Location = new Point(16, 96),
+                    Size = new Size(420, 14),
+                    Minimum = 0,
+                    Maximum = 100,
+                    Value = 0,
+                    Style = ProgressBarStyle.Marquee   // 总长度未知时先走跑马灯
+                };
+                form.Controls.Add(bar);
+
+                form.FormClosed += (s2, e2) =>
+                {
+                    _overlayForms.Remove(form);
+                    form.Dispose();
+                };
+                _overlayForms.Add(form);   // 只当 overlay：绝不接管 _current
+                form.Show();
+
+                result = new ProgressPopup(form, textLabel, bar);
+            }));
+
+            return result != null ? result : new ProgressPopup(null, null, null);
+        }
+
         public static Task<int> ShowWithButtons(string title, string message,
             string[] buttonLabels, int timeoutMs = TIMEOUT_DIALOG)
         {
