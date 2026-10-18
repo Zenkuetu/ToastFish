@@ -56,6 +56,46 @@ namespace ToastFish.View
             return st != null && st.Interactive && !st.Answered;
         }
 
+        // #96（3.4.3）：浮层提示必须避开答题弹窗。#94 的"简单上移 180px"会正好压在题目/选项上，
+        // 用户看着像"提示把题目盖住了"。这里按 正上方 → 左侧 → 下方 依次找空位，并叠开多条提示。
+        private static Form _lastOverlay;
+
+        private static void PlaceOverlay(Form form, Rectangle wa)
+        {
+            const int gap = 10;
+            var host = _current;
+            if (host == null || host.IsDisposed)
+            {
+                form.Location = new Point(wa.Right - form.Width - 20, wa.Bottom - form.Height - 20);
+                return;
+            }
+
+            while (_lastOverlay != null && _lastOverlay.IsDisposed) _lastOverlay = null;
+            var baseForm = (_lastOverlay != null && !_lastOverlay.IsDisposed) ? _lastOverlay : host;
+
+            int w = form.Width, h = form.Height;
+            int left = baseForm.Right - w;      // 与目标右对齐
+            int top = baseForm.Top - h - gap;   // 优先放正上方
+            if (top < wa.Top + gap)
+            {
+                left = baseForm.Left - w - gap; // 上方放不下 → 放左侧
+                top = baseForm.Bottom - h;
+                if (left < wa.Left + gap)
+                {
+                    left = baseForm.Left;       // 左侧也放不下 → 放下方
+                    top = baseForm.Bottom + gap;
+                    if (top + h > wa.Bottom - gap)  // 下方也放不下 → 退回左上角
+                    {
+                        left = baseForm.Left - w - gap;
+                        top = wa.Top + gap;
+                    }
+                }
+            }
+            left = Math.Max(wa.Left + gap, Math.Min(left, wa.Right - w - gap));
+            top = Math.Max(wa.Top + gap, Math.Min(top, wa.Bottom - h - gap));
+            form.Location = new Point(left, top);
+        }
+
         /// <summary>#94：标记这张弹窗已经作答，之后普通提示消息就可以安全关掉它了。</summary>
         private static void MarkAnswered(Form form)
         {
@@ -514,10 +554,16 @@ namespace ToastFish.View
 
                 var form = new PopupForm(420, 160, title, font: new Font("Microsoft YaHei UI", 12), margin: 16);
 
-                // 定位右下角（浮层模式往上挪，避免盖住正在答题的弹窗）
+                // 定位：普通提示在右下角；浮层提示吊在答题弹窗上方（绝不压住题目/选项）
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.PlaceBottomRight(wa);
-                if (overlay) form.Top = Math.Max(wa.Top + 8, form.Top - 180);
+                if (overlay)
+                {
+                    PlaceOverlay(form, wa);
+                }
+                else
+                {
+                    form.PlaceBottomRight(wa);
+                }
 
                 var titleLabel = new Label
                 {
@@ -549,6 +595,7 @@ namespace ToastFish.View
                 {
                     // 浮层不接管 _current，关掉它不能影响正在等按键的弹窗状态
                     if (_current == form) { _current = null; _isHidden = false; }
+                    if (_lastOverlay == form) _lastOverlay = null;
                     form.Dispose();
                     timer.Dispose();
                 };
@@ -557,6 +604,10 @@ namespace ToastFish.View
                 {
                     _isHidden = false;
                     _current = form;
+                }
+                else
+                {
+                    _lastOverlay = form;
                 }
                 form.Show();
             }));
