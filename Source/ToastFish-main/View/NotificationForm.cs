@@ -3025,6 +3025,14 @@ form.PlaceBottomRight();
         private int[] _zoomRightMargins;
         private Size _zoomAutoScroll;
         private System.Windows.Forms.Timer _zoomTimer;
+        /// <summary>
+        /// 「按住 Alt 放大」总开关：默认开启。弹窗右上角的小图标按钮切换它，
+        /// 所有弹窗共享同一个选择（不是每张弹窗独立记一份，否则同一屏两个弹窗状态会打架）。
+        /// </summary>
+        public static bool ZoomEnabled = true;
+        /// <summary>右上角的小图标（A+）：点击开关「按住 Alt 放大」</summary>
+        private Label _zoomToggle;
+        private ToolTip _zoomToggleTip;
 
         // ===== 弹窗启动日志（2026-10-18 新增）=====
         // 每张弹窗真正显示（ShowAsCurrent）时往 <exe>\Log\popup.log 追加一行，
@@ -3118,6 +3126,7 @@ form.PlaceBottomRight();
             _zoomTimer = new System.Windows.Forms.Timer { Interval = ZoomPollMs };
             _zoomTimer.Tick += (s2, e2) => PollZoom();
             _zoomTimer.Start();
+            CreateZoomToggle();
             Disposed += (s2, e2) =>
             {
                 if (_zoomTimer != null) { _zoomTimer.Stop(); _zoomTimer.Dispose(); _zoomTimer = null; }
@@ -3199,6 +3208,12 @@ form.PlaceBottomRight();
         private void PollZoom()
         {
             if (IsDisposed) return;
+            if (!ZoomEnabled)
+            {
+                _modHeldMs = 0;
+                if (_zoom > 1f) ApplyZoom(1f);
+                return;
+            }
             bool held = (Control.ModifierKeys & Keys.Alt) == Keys.Alt;
             if (!held)
             {
@@ -3208,6 +3223,67 @@ form.PlaceBottomRight();
             }
             _modHeldMs += ZoomPollMs;
             if (_modHeldMs >= ZoomHoldMs && _zoom < ZoomScale - 0.01f) ApplyZoom(ZoomScale);
+        }
+
+        /// <summary>右上角的小图标按钮：开关「按住 Alt 放大」（默认开启）</summary>
+        private void CreateZoomToggle()
+        {
+            _zoomToggleTip = new ToolTip();
+            _zoomToggle = new Label
+            {
+                AutoSize = false,
+                Width = 26,
+                Height = 18,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.Transparent,
+                Cursor = Cursors.Hand,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                Text = "A+"
+            };
+            _zoomToggle.Click += (s2, e2) =>
+            {
+                ZoomEnabled = !ZoomEnabled;
+                if (!ZoomEnabled && _zoom > 1f) ApplyZoom(1f);
+                UpdateZoomToggleVisual();
+            };
+            Controls.Add(_zoomToggle);
+            UpdateZoomToggleVisual();
+            PlaceZoomToggle();
+            _zoomToggle.BringToFront();
+
+            Disposed += (s2, e2) =>
+            {
+                if (_zoomToggleTip != null) { _zoomToggleTip.Dispose(); _zoomToggleTip = null; }
+            };
+        }
+
+        /// <summary>刷新小图标的颜色/划线/提示文字</summary>
+        private void UpdateZoomToggleVisual()
+        {
+            if (_zoomToggle == null) return;
+            _zoomToggle.ForeColor = ZoomEnabled ? Color.FromArgb(120, 220, 255) : Color.FromArgb(115, 115, 115);
+            var f = _zoomToggle.Font;
+            _zoomToggle.Font = new Font(f.FontFamily, f.Size,
+                ZoomEnabled ? FontStyle.Bold : (FontStyle.Bold | FontStyle.Strikeout));
+            if (_zoomToggleTip != null)
+            {
+                _zoomToggleTip.SetToolTip(_zoomToggle,
+                    ZoomEnabled ? "按住 Alt 放大（点此关闭）" : "放大已关闭（点此开启）");
+            }
+        }
+
+        /// <summary>把开关小图标贴到右上角（窗口缩放/改尺寸后都要重贴）</summary>
+        private void PlaceZoomToggle()
+        {
+            if (_zoomToggle == null) return;
+            _zoomToggle.Left = Math.Max(4, ClientSize.Width - _zoomToggle.Width - 5);
+            _zoomToggle.Top = 2;
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            PlaceZoomToggle();
         }
 
         /// <summary>把整个弹窗按 s 倍等比缩放（窗口尺寸、每个子控件的坐标/尺寸/内边距/字体、RichTextBox 的 ZoomFactor 一起变）</summary>
@@ -3294,6 +3370,8 @@ form.PlaceBottomRight();
                     BringToFront();
                 }
                 Invalidate(true);
+                PlaceZoomToggle();
+                if (_zoomToggle != null) _zoomToggle.BringToFront();
             }
         }
 
@@ -3310,6 +3388,7 @@ form.PlaceBottomRight();
             {
                 foreach (Control c in parent.Controls)
                 {
+                    if (c == _zoomToggle) continue;   // 开关小图标不参与缩放，永远贴右上角
                     cs.Add(c);
                     bs.Add(c.Bounds);
                     fs.Add(c.Font);
