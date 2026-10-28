@@ -931,6 +931,51 @@ body::after {
 .eq-choices { display: flex; flex-direction: column; gap: 3px; }
 .eq-choice { padding: 3px 6px; font-size: 11px; color: var(--text-dim); border-radius: 4px; }
 .eq-choice.correct { color: var(--neon-green); background: rgba(0, 255, 156, 0.08); font-weight: 700; }
+.eq-choice.wrong-pick {
+  color: var(--neon-red);
+  background: rgba(255, 61, 100, 0.10);
+  font-weight: 700;
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 61, 100, 0.55);
+}
+.eq-pick-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  color: var(--neon-red);
+  border: 1px solid rgba(255, 61, 100, 0.4);
+  text-decoration: none;
+}
+.eq-choice .eq-pick-tag.ok,
+.eq-pick-tag.ok {
+  color: var(--neon-green);
+  border-color: rgba(0, 255, 156, 0.45);
+}
+.eq-verdict { margin-left: 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
+.eq-verdict.ok { color: var(--neon-green); }
+.eq-verdict.bad { color: var(--neon-red); }
+.eq-verdict.unanswered { color: var(--text-dim); }
+.essay-wrong-count { color: var(--neon-red); font-weight: 600; }
+.blank-answers { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px; }
+.blank-answer {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 5px 8px; border-radius: 6px; font-size: 11px;
+  background: rgba(255, 255, 255, 0.022); border: 1px solid transparent;
+}
+.blank-answer.ok { border-color: rgba(0, 255, 156, 0.28); }
+.blank-answer.bad { border-color: rgba(255, 61, 100, 0.30); }
+.blank-answer.empty { opacity: 0.55; }
+.ba-idx { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); min-width: 30px; }
+.ba-pick { font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); }
+.blank-answer.bad .ba-pick { color: var(--neon-red); text-decoration: line-through; }
+.blank-answer.ok .ba-pick { color: var(--neon-green); }
+.ba-icon { font-size: 10px; }
+.blank-answer.ok .ba-icon { color: var(--neon-green); }
+.blank-answer.bad .ba-icon { color: var(--neon-red); }
+.ba-ans { font-family: var(--font-mono); font-size: 10px; color: var(--neon-green); margin-left: auto; white-space: nowrap; }
 
 .cloze-chip {
   display: inline-flex;
@@ -2355,6 +2400,38 @@ const PageEssays = {
     const isClozeQ = (q) => q && q.type === 'cloze'
     const isCloze4Q = (q) => q && q.type === 'cloze4'
 
+    // ===== 逐题作答（2026-10-28）=====
+    // log.answers 形如 [{i:1, pick:2, ans:0, ok:false}]：匹配题的 pick/ans 是选项下标，
+    // 完形填空的 pick/ans 是单词（pick 为空串 = 没填）。老记录没有这一列，全部降级为「无作答信息」。
+    const answersOf = (log) => (log && Array.isArray(log.answers)) ? log.answers : []
+    const listedAnswers = (log) => answersOf(log).filter(a =>
+      (a.pick !== '' && a.pick !== null && a.pick !== undefined) || a.ans)
+    const findAnswer = (log, i) => answersOf(log).find(a => Number(a.i) === Number(i)) || null
+    const pickedOf = (log, i) => { const a = findAnswer(log, i); return a ? a.pick : null }
+    // 选错才算「红删除线」；选对了只是标一下「你的选择」，不划掉
+    const isWrongPick = (log, i, val) => {
+      const a = findAnswer(log, i)
+      if (!a || a.ok) return false
+      if (a.pick === '' || a.pick === null || a.pick === undefined) return false
+      return String(a.pick) === String(val)
+    }
+    const isRightPick = (log, i, val) => {
+      const a = findAnswer(log, i)
+      if (!a || !a.ok) return false
+      return String(a.pick) === String(val)
+    }
+    const hasAnswers = (log) => listedAnswers(log).length > 0
+    // 真正选了/填了且判错的题数（未作答不计入，避免和 attempted 口径打架）
+    const wrongCount = (log) => answersOf(log).filter(a =>
+      a.pick !== '' && a.pick !== null && a.pick !== undefined && !a.ok).length
+    const verdictOf = (log, i) => {
+      const a = findAnswer(log, i)
+      if (!a) return ''
+      if (a.pick === '' || a.pick === null || a.pick === undefined) return 'unanswered'
+      return a.ok ? 'ok' : 'bad'
+    }
+    const verdictText = (v) => v === 'ok' ? '✓ 答对' : (v === 'bad' ? '✗ 答错' : (v === 'unanswered' ? '○ 未作答' : ''))
+
     // 删除 + 提示
     const deleting = ref(false)
     const toastMsg = ref('')
@@ -2410,6 +2487,14 @@ const PageEssays = {
       lines.push('')
       lines.push('—— 测验结果 ——')
       lines.push('共作答 ' + attempted + ' 题，答对 ' + correct + ' 题，答错 ' + wrong + ' 题。')
+      // 逐题作答（2026-10-28）：列出错题编号，并在各题选项后标「我选了」
+      const wrongIdxs = answersOf(log).filter(a =>
+        a.pick !== '' && a.pick !== null && a.pick !== undefined && !a.ok).map(a => a.i)
+      if (wrongIdxs.length) {
+        const prefix = (cloze || isCloze4Q(log.questions)) ? '空' : 'Q'
+        lines.push('错题：' + wrongIdxs.map(i => prefix + i).join('、'))
+      }
+      if (answersOf(log).length) lines.push('（每题选项后标了「我选了 …」，请据此讲我为什么错）')
       lines.push('')
       if (cloze) {
         lines.push('—— 15选10 完形填空：候选词 ——')
@@ -2423,24 +2508,40 @@ const PageEssays = {
           if (c.blank >= 0) lines.push('[空' + (c.blank + 1) + '] ' + c.word)
           else lines.push('[干扰词] ' + c.word)
         })
+        lines.push('')
+        lines.push('—— 我的作答 ——')
+        listedAnswers(log).forEach(a => {
+          lines.push('空' + a.i + '：我填 ' + (a.pick || '（未填）') + (a.ok ? '  ✓' : '  ✗ 正确答案：' + (a.ans || '?')))
+        })
       } else if (isCloze4Q(log.questions)) {
         lines.push('—— 20空四选一 完形填空：各空选项 ——')
         const qs = (log.questions && log.questions.questions) || []
         qs.forEach((q, qi) => {
-          lines.push('空' + (q.blank || (qi + 1)) + '：')
+          const blankNo = q.blank || (qi + 1)
+          const pick = pickedOf(log, blankNo)
+          const verdict = verdictOf(log, blankNo)
+          const tail = verdict === 'ok' ? '  【我答对了】'
+            : (verdict === 'bad' ? '  【我答错了】' : (verdict === 'unanswered' ? '  【我未作答】' : ''))
+          lines.push('空' + blankNo + '：' + tail)
           ;(q.options || []).forEach((opt, oi) => {
             const mark = oi === q.answer ? '  (正确答案)' : ''
-            lines.push('   ' + String.fromCharCode(65 + oi) + '. ' + opt + mark)
+            const mine = (pick === opt) ? '  ← 我选了这项' + (oi === q.answer ? '（对）' : '（错）') : ''
+            lines.push('   ' + String.fromCharCode(65 + oi) + '. ' + opt + mark + mine)
           })
         })
       } else {
         lines.push('—— 题目与选项 ——')
         const qs = Array.isArray(log.questions) ? log.questions : []
         qs.forEach((q, qi) => {
-          lines.push('Q' + (qi + 1) + '. ' + (q.q || ''))
+          const pick = pickedOf(log, qi + 1)
+          const verdict = verdictOf(log, qi + 1)
+          const tail = verdict === 'ok' ? '  【我答对了】'
+            : (verdict === 'bad' ? '  【我答错了】' : (verdict === 'unanswered' ? '  【我未作答】' : ''))
+          lines.push('Q' + (qi + 1) + '. ' + (q.q || '') + tail)
           ;(q.choices || []).forEach((c, ci) => {
             const mark = ci === q.answer ? '  (正确答案)' : ''
-            lines.push('   ' + String.fromCharCode(65 + ci) + '. ' + c + mark)
+            const mine = (pick === ci) ? '  ← 我选了这项' + (ci === q.answer ? '（对）' : '（错）') : ''
+            lines.push('   ' + String.fromCharCode(65 + ci) + '. ' + c + mark + mine)
           })
           lines.push('')
         })
@@ -2484,7 +2585,8 @@ const PageEssays = {
       }
     }
 
-    return { expandedId, toggle, onEnter, onLeave, isEssayQ, isClozeQ, isCloze4Q, deleteEssay, deleting, toastMsg, toastType, copyEssayForAI }
+    return { expandedId, toggle, onEnter, onLeave, isEssayQ, isClozeQ, isCloze4Q, deleteEssay, deleting, toastMsg, toastType, copyEssayForAI,
+             answersOf, listedAnswers, pickedOf, isWrongPick, isRightPick, hasAnswers, wrongCount, verdictOf, verdictText }
   },
   template: `
 <div class="page page-essays">
@@ -2514,7 +2616,7 @@ const PageEssays = {
             {{ isClozeQ(log.questions) ? '🔤 15选10' : (isCloze4Q(log.questions) ? '🔤 20空四选一' : '📖 阅读理解') }}
           </span>
           <span class="essay-date">{{ log.createdAt }}</span>
-          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ log.correct || 0 }}/{{ isClozeQ(log.questions) ? (log.attempted || 10) : (isCloze4Q(log.questions) ? (log.attempted || 20) : (log.attempted || 3)) }}正确</span>
+          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ log.correct || 0 }}/{{ isClozeQ(log.questions) ? (log.attempted || 10) : (isCloze4Q(log.questions) ? (log.attempted || 20) : (log.attempted || 3)) }}正确<span v-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 题</span></span>
         </div>
         <div class="essay-summary-right">
           <span class="essay-snippet">{{ (log.essayEN || '').substring(0, 120) }}{{ (log.essayEN || '').length > 120 ? '...' : '' }}</span>
@@ -2542,19 +2644,22 @@ const PageEssays = {
         <div class="essay-section" v-if="isEssayQ(log.questions)">
           <h4>❓ 题目 ({{ log.correct || 0 }}/{{ log.attempted || log.questions.length }} 正确)</h4>
           <div v-for="(q, qi) in log.questions" :key="qi" class="essay-question">
-            <p class="eq-text">Q{{ qi + 1 }}. {{ q.q }}</p>
+            <p class="eq-text">
+              Q{{ qi + 1 }}. {{ q.q }}
+              <span v-if="verdictOf(log, qi + 1)" class="eq-verdict" :class="verdictOf(log, qi + 1)">{{ verdictText(verdictOf(log, qi + 1)) }}</span>
+            </p>
             <div class="eq-choices">
               <span v-for="(c, ci) in q.choices" :key="ci"
                     class="eq-choice"
-                    :class="{ correct: ci === q.answer }">
-                {{ String.fromCharCode(65 + ci) }}. {{ c }}
+                    :class="{ correct: ci === q.answer, 'wrong-pick': isWrongPick(log, qi + 1, ci) }">
+                {{ String.fromCharCode(65 + ci) }}. {{ c }}<span v-if="pickedOf(log, qi + 1) === ci" class="eq-pick-tag" :class="{ ok: isRightPick(log, qi + 1, ci) }">你的选择</span>
               </span>
             </div>
           </div>
         </div>
         <!-- 15选10 候选词 -->
         <div class="essay-section" v-if="isClozeQ(log.questions)">
-          <h4>🔤 候选词 (15选10 · {{ log.correct || 0 }}/{{ log.attempted || 10 }} 正确)</h4>
+          <h4>🔤 候选词 (15选10 · {{ log.correct || 0 }}/{{ log.attempted || 10 }} 正确<span v-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 空</span>)</h4>
           <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
             <span v-for="(c, ci) in log.questions.candidates" :key="ci"
                   class="cloze-chip"
@@ -2566,18 +2671,43 @@ const PageEssays = {
             <span style="color:var(--neon-green);">● 正确词（填入空位）</span> &nbsp;
             <span style="color:var(--neon-red);">● 干扰词</span>
           </p>
+          <div v-if="hasAnswers(log)" style="margin-top:10px;">
+            <div class="blank-answers">
+              <div v-for="a in listedAnswers(log)" :key="a.i" class="blank-answer"
+                   :class="a.ok ? 'ok' : (a.pick ? 'bad' : 'empty')">
+                <span class="ba-idx">空{{ a.i }}</span>
+                <span class="ba-pick">{{ a.pick || '未填' }}</span>
+                <span class="ba-icon">{{ a.ok ? '✓' : '✗' }}</span>
+                <span v-if="!a.ok" class="ba-ans">正确：{{ a.ans || '—' }}</span>
+              </div>
+            </div>
+          </div>
         </div>
         <!-- 20空四选一 完形填空 -->
         <div class="essay-section" v-if="isCloze4Q(log.questions)">
-          <h4>🔤 完形填空 (20空四选一 · {{ log.correct || 0 }}/{{ log.attempted || 20 }} 正确)</h4>
+          <h4>🔤 完形填空 (20空四选一 · {{ log.correct || 0 }}/{{ log.attempted || 20 }} 正确<span v-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 空</span>)</h4>
           <div v-for="(q, qi) in log.questions.questions" :key="qi" class="essay-question">
-            <p class="eq-text">空 {{ q.blank }}：</p>
+            <p class="eq-text">
+              空 {{ q.blank }}：
+              <span v-if="verdictOf(log, q.blank)" class="eq-verdict" :class="verdictOf(log, q.blank)">{{ verdictText(verdictOf(log, q.blank)) }}</span>
+            </p>
             <div class="eq-choices">
               <span v-for="(opt, oi) in q.options" :key="oi"
                     class="eq-choice"
-                    :class="{ correct: oi === q.answer }">
-                {{ String.fromCharCode(65 + oi) }}. {{ opt }}
+                    :class="{ correct: oi === q.answer, 'wrong-pick': isWrongPick(log, q.blank, opt) }">
+                {{ String.fromCharCode(65 + oi) }}. {{ opt }}<span v-if="pickedOf(log, q.blank) === opt" class="eq-pick-tag" :class="{ ok: isRightPick(log, q.blank, opt) }">你的选择</span>
               </span>
+            </div>
+          </div>
+          <div v-if="hasAnswers(log)" style="margin-top:10px;">
+            <div class="blank-answers">
+              <div v-for="a in listedAnswers(log)" :key="a.i" class="blank-answer"
+                   :class="a.ok ? 'ok' : (a.pick ? 'bad' : 'empty')">
+                <span class="ba-idx">空{{ a.i }}</span>
+                <span class="ba-pick">{{ a.pick || '未填' }}</span>
+                <span class="ba-icon">{{ a.ok ? '✓' : '✗' }}</span>
+                <span v-if="!a.ok" class="ba-ans">正确：{{ a.ans || '—' }}</span>
+              </div>
             </div>
           </div>
         </div>

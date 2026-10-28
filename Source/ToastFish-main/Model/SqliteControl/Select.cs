@@ -1212,19 +1212,39 @@ namespace ToastFish.Model.SqliteControl
                         questions   TEXT,
                         attempted   INTEGER DEFAULT 0,
                         correct     INTEGER DEFAULT 0,
-                        modelMode   INTEGER DEFAULT 0
+                        modelMode   INTEGER DEFAULT 0,
+                        answers     TEXT
                     )";
                     using (SQLiteCommand cmd = new SQLiteCommand(sql, db))
                         cmd.ExecuteNonQuery();
+
+                    // 老库迁移：逐题作答列（2026-10-28 新增，仪表盘复盘具体错题用）
+                    // PRAGMA 检查后 ALTER，幂等；表刚建时列已存在，跳过。
+                    bool hasAnswers = false;
+                    using (SQLiteCommand cmd = new SQLiteCommand("PRAGMA table_info(EssayLog)", db))
+                    using (SQLiteDataReader rd = cmd.ExecuteReader())
+                    {
+                        while (rd.Read())
+                        {
+                            if (string.Equals(rd["name"] as string, "answers", StringComparison.OrdinalIgnoreCase))
+                            { hasAnswers = true; break; }
+                        }
+                    }
+                    if (!hasAnswers)
+                    {
+                        using (SQLiteCommand cmd = new SQLiteCommand(
+                            "ALTER TABLE EssayLog ADD COLUMN answers TEXT", db))
+                            cmd.ExecuteNonQuery();
+                    }
                 }
             }
             catch { /* 表已存在或数据库不可用 */ }
         }
 
-        /// <summary>写入 AI 短文记录（2026-07-22）。</summary>
+        /// <summary>写入 AI 短文记录（2026-07-22；2026-10-28 增加逐题作答 answersJson）。</summary>
         public static void InsertEssayLog(string createdAt, string bookName, int wordCount,
             string wordsJson, string essayEN, string essayCN, string questionsJson,
-            int attempted, int correct, int modelMode)
+            int attempted, int correct, int modelMode, string answersJson = null)
         {
             try
             {
@@ -1234,8 +1254,8 @@ namespace ToastFish.Model.SqliteControl
                 {
                     db.Open();
                     string sql = @"INSERT INTO EssayLog
-                        (createdAt,bookName,wordCount,words,essayEN,essayCN,questions,attempted,correct,modelMode)
-                        VALUES (@c,@b,@wc,@w,@en,@cn,@q,@a,@cr,@mm)";
+                        (createdAt,bookName,wordCount,words,essayEN,essayCN,questions,attempted,correct,modelMode,answers)
+                        VALUES (@c,@b,@wc,@w,@en,@cn,@q,@a,@cr,@mm,@ans)";
                     using (SQLiteCommand cmd = new SQLiteCommand(sql, db))
                     {
                         cmd.Parameters.AddWithValue("@c", createdAt);
@@ -1248,6 +1268,7 @@ namespace ToastFish.Model.SqliteControl
                         cmd.Parameters.AddWithValue("@a", attempted);
                         cmd.Parameters.AddWithValue("@cr", correct);
                         cmd.Parameters.AddWithValue("@mm", modelMode);
+                        cmd.Parameters.AddWithValue("@ans", answersJson ?? "[]");
                         cmd.ExecuteNonQuery();
                     }
                 }

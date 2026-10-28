@@ -1261,7 +1261,8 @@ namespace ToastFish.View
         public static void ShowEssayPopup(string essayEN, string essayCN,
             List<string> highlightWords, List<ToastFish.Model.SqliteControl.Word> essayWords,
             List<Model.Ai.EssayQuestion> questions,
-            Action<int> callback, int timeoutMs = TIMEOUT_READING)
+            Action<int> callback, int timeoutMs = TIMEOUT_READING,
+            Action<string> answersSink = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(-1); return; }
@@ -1271,12 +1272,12 @@ namespace ToastFish.View
                 // === Phase 1：阅读前信息页（2026-07-21） ===
                 if (essayWords != null && essayWords.Count > 0)
                 {
-                    ShowEssayInfoPage(essayEN, essayCN, highlightWords, essayWords, questions, callback, timeoutMs);
+                    ShowEssayInfoPage(essayEN, essayCN, highlightWords, essayWords, questions, callback, timeoutMs, answersSink);
                     return;
                 }
 
                 // 无 Word 列表（回退）：直接进入 Phase 2（无测验）
-                ShowEssayContent(essayEN, essayCN, highlightWords, null, callback, timeoutMs);
+                ShowEssayContent(essayEN, essayCN, highlightWords, null, callback, timeoutMs, answersSink);
             }));
         }
 
@@ -1284,7 +1285,7 @@ namespace ToastFish.View
         private static void ShowEssayInfoPage(string essayEN, string essayCN,
             List<string> highlightWords, List<ToastFish.Model.SqliteControl.Word> essayWords,
             List<Model.Ai.EssayQuestion> questions,
-            Action<int> callback, int timeoutMs)
+            Action<int> callback, int timeoutMs, Action<string> answersSink = null)
         {
             // 关闭上一个弹窗（测验弹窗等）
             CloseMessageOverlays();
@@ -1368,7 +1369,7 @@ namespace ToastFish.View
                 if (phase2Entered) return;
                 phase2Entered = true;
                 form.Close();
-                ShowEssayContent(essayEN, essayCN, highlightWords, questions, callback, timeoutMs);
+                ShowEssayContent(essayEN, essayCN, highlightWords, questions, callback, timeoutMs, answersSink);
             };
             btn.Click += (s, e) => enterPhase2();
             form.Controls.Add(btn);
@@ -1410,7 +1411,7 @@ namespace ToastFish.View
         /// <summary>Phase 2：短文阅读 + 内嵌测验（2026-07-21 重构）。</summary>
         private static void ShowEssayContent(string essayEN, string essayCN,
             List<string> highlightWords, List<Model.Ai.EssayQuestion> questions,
-            Action<int> callback, int timeoutMs)
+            Action<int> callback, int timeoutMs, Action<string> answersSink = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(-1); return; }
@@ -1504,6 +1505,7 @@ namespace ToastFish.View
 
                 // === 测验状态 ===
                 int quizIdx = -1, correctCnt = 0, attemptedCnt = 0;
+                var picks = new List<int>();   // 逐题所选下标（2026-10-28：仪表盘复盘具体错题用）
 
                 // ---- 阅读阶段按钮 ----
                 int btnH = 40;
@@ -1572,11 +1574,18 @@ namespace ToastFish.View
                     rtb.ScrollBars = RichTextBoxScrollBars.Vertical;
 
                     int cc = 0, ac = 0;
-                    Action onCorrect = () => { cc++; ac++; };
-                    Action onWrong = () => { ac++; };
+                    int qi = 0;
+
+                    // 逐题作答（2026-10-28）：picks 按作答顺序记录所选下标，
+                    // 结束时序列化进 EssayLog.answers，仪表盘据此标出具体错题。
+                    Action<int> onAnswer = pick =>
+                    {
+                        ac++;
+                        picks.Add(pick);
+                        if (pick == questions[qi].Answer) cc++;
+                    };
 
                     Action showNext = null;
-                    int qi = 0;
                     showNext = () =>
                     {
                         if (qi < questions.Count)
@@ -1589,12 +1598,12 @@ namespace ToastFish.View
                             // 先按满宽排版量真实内容高；若放不下（需要面板滚动），预留滚动条宽度重排一次，
                             // 避免滚动条压住选项右边缘（2026-10-28）
                             int qContentH = ShowQuizInPanel(bottomPanel, questions, qi, fontQuiz, fontQuizB, fontSmall,
-                                onCorrect, onWrong, () => { qi++; showNext(); });
+                                onAnswer, () => { qi++; showNext(); });
                             int maxPanelH = CapH() - rtbTop - minPassageH - 18;
                             if (qContentH > maxPanelH)
                             {
                                 qContentH = ShowQuizInPanel(bottomPanel, questions, qi, fontQuiz, fontQuizB, fontSmall,
-                                    onCorrect, onWrong, () => { qi++; showNext(); }, sbW);
+                                    onAnswer, () => { qi++; showNext(); }, sbW);
                             }
 
                             // 窗口高度：优先「短文全显示 + 选项全显示」，放不下就以 75% 屏高封顶，
@@ -1649,6 +1658,7 @@ namespace ToastFish.View
                             Action doClose = () =>
                             {
                                 if (closed) return; closed = true;
+                                answersSink?.Invoke(BuildChoiceAnswersJson(picks, questions));
                                 form.Close(); callback((ac << 16) | cc);
                             };
                             closeBtn.Click += (s2, e2) => doClose();
@@ -1674,7 +1684,13 @@ namespace ToastFish.View
                 if (timeoutMs > 0)
                 {
                     timer = new System.Windows.Forms.Timer { Interval = timeoutMs };
-                    timer.Tick += (s, e) => { timer.Stop(); callback((attemptedCnt << 16) | correctCnt); form.Close(); };
+                    timer.Tick += (s, e) =>
+                    {
+                        timer.Stop();
+                        answersSink?.Invoke(BuildChoiceAnswersJson(picks, questions));
+                        callback((attemptedCnt << 16) | correctCnt);
+                        form.Close();
+                    };
                     timer.Start();
                     form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
                 }
@@ -1705,7 +1721,7 @@ namespace ToastFish.View
         private static int ShowQuizInPanel(Panel panel,
             List<Model.Ai.EssayQuestion> questions, int idx,
             Font fontQ, Font fontQB, Font fontS,
-            Action onCorrect, Action onWrong, Action onNext,
+            Action<int> onAnswer, Action onNext,
             int reservedW = 0)
         {
             panel.Controls.Clear();
@@ -1801,15 +1817,14 @@ namespace ToastFish.View
 
                     // 结果反馈
                     lblResult.Visible = true;
+                    onAnswer(cIdx);
                     if (correct2)
                     {
-                        onCorrect();
                         lblResult.Text = "✓ 正确！";
                         lblResult.ForeColor = Color.FromArgb(0, 255, 136);
                     }
                     else
                     {
-                        onWrong();
                         lblResult.Text = "✗ 正确答案是 " + (char)('A' + q.Answer) + " — 在上面短文里找找对应的部分";
                         lblResult.ForeColor = Color.FromArgb(255, 130, 100);
                     }
@@ -1826,6 +1841,50 @@ namespace ToastFish.View
 
             // 返回该题所需内容高（顶部8 + 题目 + 结果条 + 选项 + 底部8）
             return btnY + 8;
+        }
+
+        /// <summary>
+        /// 把「逐题所选下标」序列化成 JSON（2026-10-28）：[{"i":1,"pick":2,"ans":0,"ok":false}, ...]
+        /// i 从 1 开始（与仪表盘 Q1/Q2 编号一致）；只记录真正作答过的题。
+        /// </summary>
+        private static string BuildChoiceAnswersJson(List<int> picks, List<Model.Ai.EssayQuestion> questions)
+        {
+            try
+            {
+                var jss = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var list = new List<object>();
+                for (int i = 0; i < picks.Count; i++)
+                {
+                    int ans = (questions != null && i < questions.Count) ? questions[i].Answer : -1;
+                    list.Add(new { i = i + 1, pick = picks[i], ans = ans, ok = picks[i] == ans });
+                }
+                return jss.Serialize(list);
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("BuildChoiceAnswersJson: " + ex.Message); return "[]"; }
+        }
+
+        /// <summary>
+        /// 把「逐空填写的词」序列化成 JSON（2026-10-28）：[{"i":1,"pick":"brick","ans":"brick","ok":true}, ...]
+        /// i = 空号（从 1 开始）；pick 为 null/空串表示该空没填。
+        /// </summary>
+        private static string BuildWriteAnswersJson(string[] picks, string[] answers)
+        {
+            try
+            {
+                var jss = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var list = new List<object>();
+                if (picks != null)
+                {
+                    for (int i = 0; i < picks.Length; i++)
+                    {
+                        string p = picks[i] ?? "";
+                        string a = (answers != null && i < answers.Length) ? (answers[i] ?? "") : "";
+                        list.Add(new { i = i + 1, pick = p, ans = a, ok = p.Length > 0 && p == a });
+                    }
+                }
+                return jss.Serialize(list);
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("BuildWriteAnswersJson: " + ex.Message); return "[]"; }
         }
 
         /// <summary>测验结束摘要（2026-07-21）。</summary>
@@ -2062,7 +2121,8 @@ namespace ToastFish.View
         /// callback(attempted << 16 | correct) —— 与 ShowEssayPopup 的测验回调签名一致。
         /// </summary>
         public static void ShowClozePopup(ClozeResult cloze, List<string> highlightWords,
-            Action<int> callback, int timeoutMs = TIMEOUT_READING)
+            Action<int> callback, int timeoutMs = TIMEOUT_READING,
+            Action<string> answersSink = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(0); return; }
@@ -2546,6 +2606,7 @@ form.PlaceBottomRight();
                         clTimer?.Stop(); clTimer?.Dispose();
                         if (_current == form) _current = null;
                         _isHidden = false;
+                        answersSink?.Invoke(BuildWriteAnswersJson(filledWords, correctWords));
                         form.Close(); form.Dispose();
                         callback((correctWordCount << 16) | corr);
                     }
@@ -2645,6 +2706,7 @@ form.PlaceBottomRight();
                             if (filledWords[b] != null && filledWords[b] == correctWords[b]) corr++;
                         if (_current == form) _current = null;
                         _isHidden = false;
+                        answersSink?.Invoke(BuildWriteAnswersJson(filledWords, correctWords));
                         form.Close(); form.Dispose();
                         callback((att << 16) | corr);
                     };
@@ -2673,7 +2735,8 @@ form.PlaceBottomRight();
         /// callback((attempted&lt;&lt;16) | correct)：attempted=已填数，correct=答对数。
         /// </summary>
         public static void ShowCloze4ChoicePopup(Cloze4Result cloze, List<string> highlightWords,
-            Action<int> callback, int timeoutMs = TIMEOUT_READING)
+            Action<int> callback, int timeoutMs = TIMEOUT_READING,
+            Action<string> answersSink = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(0); return; }
@@ -3055,6 +3118,7 @@ form.PlaceBottomRight();
                         clTimer?.Stop(); clTimer?.Dispose();
                         if (_current == form) _current = null;
                         _isHidden = false;
+                        answersSink?.Invoke(BuildWriteAnswersJson(filledWords, correctWords));
                         form.Close(); form.Dispose();
                         callback((filledCount << 16) | corr);
                     }
@@ -3091,6 +3155,7 @@ form.PlaceBottomRight();
                             if (filledWords[b] != null && filledWords[b] == correctWords[b]) corr++;
                         if (_current == form) _current = null;
                         _isHidden = false;
+                        answersSink?.Invoke(BuildWriteAnswersJson(filledWords, correctWords));
                         form.Close(); form.Dispose();
                         callback((att << 16) | corr);
                     };

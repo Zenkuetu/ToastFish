@@ -145,6 +145,12 @@ def read_essay_logs(conn):
             try:
                 log['questions'] = json.loads(log['questions'])
             except: pass
+            # 逐题作答（2026-10-28 新增列；更老的库连列都没有 → 空数组 = 无作答信息）
+            try:
+                raw = log.get('answers')
+                log['answers'] = json.loads(raw) if raw else []
+            except:
+                log['answers'] = []
             logs.append(log)
         conn.row_factory = None
         return logs

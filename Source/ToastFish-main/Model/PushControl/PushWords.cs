@@ -337,7 +337,8 @@ namespace ToastFish.Model.PushControl
         }
 
         /// <summary>持久化 AI 短文到 EssayLog 表（2026-07-22）。</summary>
-        private static void SaveEssayLog(EssayPreFetchResult fetched, int attempted, int correct)
+        private static void SaveEssayLog(EssayPreFetchResult fetched, int attempted, int correct,
+            string answersJson = null)
         {
             if (TestMode) return; // 测试模式不走独立连接写入
             try
@@ -363,14 +364,14 @@ namespace ToastFish.Model.PushControl
                 Select.InsertEssayLog(createdAt, Select.TABLE_NAME, wordsArr.Count,
                     wordsJson, fetched.Result.EssayEN,
                     fetched.Result.EssayCN ?? "", questionsJson,
-                    attempted, correct, modelMode);
+                    attempted, correct, modelMode, answersJson);
             }
             catch (Exception ex) { Debug.WriteLine("SaveEssayLog: " + ex.Message); }
         }
 
         /// <summary>持久化 15选10 完形填空到 EssayLog 表（2026-07-22）。</summary>
         private static void SaveClozeLog(List<Word> clozeWords, Model.Ai.ClozeResult cloze,
-            int attempted, int correct)
+            int attempted, int correct, string answersJson = null)
         {
             if (TestMode) return; // 测试模式不走独立连接写入
             try
@@ -390,14 +391,14 @@ namespace ToastFish.Model.PushControl
 
                 Select.InsertEssayLog(createdAt, Select.TABLE_NAME, wordsArr.Count,
                     wordsJson, cloze.Text, cloze.TextCN ?? "", questionsJson,
-                    attempted, correct, modelMode);
+                    attempted, correct, modelMode, answersJson);
             }
             catch (Exception ex) { Debug.WriteLine("SaveClozeLog: " + ex.Message); }
         }
 
         /// <summary>持久化 20空四选一 完形填空到 EssayLog 表（考研英语，2026-09-05）。</summary>
         private static void SaveCloze4Log(List<Word> cloze4Words, Model.Ai.Cloze4Result cloze4,
-            int attempted, int correct)
+            int attempted, int correct, string answersJson = null)
         {
             if (TestMode) return; // 测试模式不走独立连接写入
             try
@@ -418,7 +419,7 @@ namespace ToastFish.Model.PushControl
 
                 Select.InsertEssayLog(createdAt, Select.TABLE_NAME, wordsArr.Count,
                     wordsJson, cloze4.Text, cloze4.TextCN ?? "", questionsJson,
-                    attempted, correct, modelMode);
+                    attempted, correct, modelMode, answersJson);
             }
             catch (Exception ex) { Debug.WriteLine("SaveCloze4Log: " + ex.Message); }
         }
@@ -1828,16 +1829,18 @@ namespace ToastFish.Model.PushControl
                             using (var done = new ManualResetEvent(false))
                             {
                                 int cloze4Result = 0;
+                                string cloze4AnswersJson = "[]";   // 逐空作答（2026-10-28）
                                 NotificationForm.ShowCloze4ChoicePopup(cloze4,
                                     cloze4Words.Select(w => w.headWord).ToList(),
-                                    r => { cloze4Result = r; done.Set(); });
+                                    r => { cloze4Result = r; done.Set(); },
+                                    0, json => { cloze4AnswersJson = json; });
                                 done.WaitOne();
                                 int attempted = (cloze4Result >> 16) & 0xFFFF;
                                 int correct = cloze4Result & 0xFFFF;
                                 if (attempted > 0)
                                 {
                                     ApplyEssaySM2Feedback(cloze4Words, finishedCards, attempted, correct);
-                                    SaveCloze4Log(cloze4Words, cloze4, attempted, correct);
+                                    SaveCloze4Log(cloze4Words, cloze4, attempted, correct, cloze4AnswersJson);
                                 }
                             }
                             return;
@@ -1949,9 +1952,11 @@ namespace ToastFish.Model.PushControl
                         using (var done = new ManualResetEvent(false))
                         {
                             int clozeResult = 0;
+                            string clozeAnswersJson = "[]";   // 逐空作答（2026-10-28）
                             NotificationForm.ShowClozePopup(cloze,
                                 clozeWords.Select(w => w.headWord).ToList(),
-                                r => { clozeResult = r; done.Set(); });
+                                r => { clozeResult = r; done.Set(); },
+                                0, json => { clozeAnswersJson = json; });
                             done.WaitOne();
                             int attempted = (clozeResult >> 16) & 0xFFFF;
                             int correct = clozeResult & 0xFFFF;
@@ -1959,7 +1964,7 @@ namespace ToastFish.Model.PushControl
                             if (attempted > 0)
                             {
                                 ApplyEssaySM2Feedback(clozeWords, finishedCards, attempted, correct);
-                                SaveClozeLog(clozeWords, cloze, attempted, correct);
+                                SaveClozeLog(clozeWords, cloze, attempted, correct, clozeAnswersJson);
                             }
                         }
                         return;
@@ -2069,17 +2074,19 @@ namespace ToastFish.Model.PushControl
                     using (var done = new ManualResetEvent(false))
                     {
                         int quizResult = 0;
+                        string answersJson = "[]";   // 逐题作答（2026-10-28）
                         NotificationForm.ShowEssayPopup(
                             fetched.Result.EssayEN, fetched.Result.EssayCN,
                             fetched.EssayWords.Select(w => w.headWord).ToList(),
                             fetched.EssayWords, qs,
-                            result => { quizResult = result; done.Set(); });
+                            result => { quizResult = result; done.Set(); },
+                            0, json => { answersJson = json; });
                         done.WaitOne(); // 阻塞直到用户完成阅读+测验
                         int attempted = (quizResult >> 16) & 0xFFFF;
                         int correct = quizResult & 0xFFFF;
 
                         // 持久化短文记录（2026-07-22）
-                        SaveEssayLog(fetched, attempted, correct);
+                        SaveEssayLog(fetched, attempted, correct, answersJson);
 
                         if (attempted > 0)
                             ApplyEssaySM2Feedback(fetched.EssayWords, finishedCards, attempted, correct);
