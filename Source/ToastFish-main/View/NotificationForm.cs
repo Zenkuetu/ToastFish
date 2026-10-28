@@ -1567,21 +1567,9 @@ namespace ToastFish.View
                     if (!hasQuiz) { form.Close(); callback(0); return; }
                     quizIdx = 0;
 
-                    // RTB 拉伸到测验面板上方；面板高度由 ShowQuizInPanel 返回，窗体钳制到 75% 上界
-                    int panelTop = rtb.Top + Math.Max(200, passageH - 60); // 至少留 200px 给短文
-                    int panelH = 220; // 占位，首次 showNext 由 ShowQuizInPanel 返回校正
-                    panelTop = Math.Min(panelTop, CapH() - panelH - 10);   // 钳制：panelTop+panelH 不越 75% 屏高
-                    bottomPanel.Location = new Point(pad, panelTop);
-                    bottomPanel.Height = panelH;
-                    rtb.Height = Math.Max(0, panelTop - rtb.Top - 6);
+                    // 测验阶段的短文 / 面板 / 窗体高度全部交由 showNext 按「题目真实内容高」决定
+                    // （2026-10-28 修复：旧实现先写死 panelH=220 再排版，长选项必然被面板下沿裁掉）
                     rtb.ScrollBars = RichTextBoxScrollBars.Vertical;
-
-                    int newFH = Math.Min(bottomPanel.Bottom + 10, CapH());
-                    if (newFH != form.Height)
-                    {
-                        form.Height = newFH;
-                        form.Top = wa.Bottom - newFH - 20;
-                    }
 
                     int cc = 0, ac = 0;
                     Action onCorrect = () => { cc++; ac++; };
@@ -1593,18 +1581,54 @@ namespace ToastFish.View
                     {
                         if (qi < questions.Count)
                         {
+                            int rtbTop = rtb.Top;
+                            int essayH = Math.Max(60, rtb.Height);   // 阅读阶段实际短文高（尽量保留）
+                            const int minPassageH = 150;             // 测验阶段短文至少留这么高
+                            int sbW = SystemInformation.VerticalScrollBarWidth + 2;
+
+                            // 先按满宽排版量真实内容高；若放不下（需要面板滚动），预留滚动条宽度重排一次，
+                            // 避免滚动条压住选项右边缘（2026-10-28）
                             int qContentH = ShowQuizInPanel(bottomPanel, questions, qi, fontQuiz, fontQuizB, fontSmall,
                                 onCorrect, onWrong, () => { qi++; showNext(); });
-                            // 面板高度 = 该题内容高（题目+结果条+选项），超 75% 上界内可用高时启用面板滚动
-                            int available = CapH() - (bottomPanel.Top + 10);
-                            int panelH_new = Math.Max(120, Math.Min(qContentH, available));
+                            int maxPanelH = CapH() - rtbTop - minPassageH - 18;
+                            if (qContentH > maxPanelH)
+                            {
+                                qContentH = ShowQuizInPanel(bottomPanel, questions, qi, fontQuiz, fontQuizB, fontSmall,
+                                    onCorrect, onWrong, () => { qi++; showNext(); }, sbW);
+                            }
+
+                            // 窗口高度：优先「短文全显示 + 选项全显示」，放不下就以 75% 屏高封顶，
+                            // 再从短文里让出高度给面板（短文区自带滚动条）
+                            int wantH = rtbTop + essayH + 8 + qContentH + 10;
+                            int quizFormH = Math.Min(wantH, CapH());
+                            int panelH_new = Math.Min(qContentH, Math.Max(120, quizFormH - rtbTop - 18 - minPassageH));
+                            int passageH2 = quizFormH - rtbTop - 8 - panelH_new - 10;
+                            if (passageH2 < 60) passageH2 = 60;
+                            // 短文高对齐整行高，避免底部露出半行被裁的字（2026-10-28）
+                            int lineH2 = Math.Max(12, rtb.Font.Height);
+                            try
+                            {
+                                int i1 = rtb.GetFirstCharIndexFromLine(1);
+                                if (i1 > 0)
+                                {
+                                    int dy = rtb.GetPositionFromCharIndex(i1).Y - rtb.GetPositionFromCharIndex(0).Y;
+                                    if (dy > 0) lineH2 = dy;   // RichEdit 实际行距（含段落间距）
+                                }
+                            }
+                            catch { }
+                            if (passageH2 % lineH2 != 0) passageH2 = Math.Max(60, (passageH2 / lineH2) * lineH2);
+                            quizFormH = Math.Min(CapH(), rtbTop + passageH2 + 8 + panelH_new + 10);
+
+                            bottomPanel.Location = new Point(pad, rtbTop + passageH2 + 8);
                             bottomPanel.Height = panelH_new;
+                            rtb.Height = passageH2;
+
                             bottomPanel.AutoScroll = qContentH > panelH_new;
                             bottomPanel.AutoScrollMinSize = qContentH > panelH_new
                                 ? new Size(bottomPanel.ClientSize.Width, qContentH) : Size.Empty;
                             bottomPanel.AutoScrollPosition = new Point(0, 0); // 切题滚回顶部
-                            int fh = Math.Min(bottomPanel.Bottom + 10, CapH());
-                            if (fh != form.Height) { form.Height = fh; form.Top = wa.Bottom - fh - 20; }
+
+                            if (quizFormH != form.Height) { form.Height = quizFormH; form.Top = wa.Bottom - quizFormH - 20; }
                         }
                         else
                         {
@@ -1681,12 +1705,13 @@ namespace ToastFish.View
         private static int ShowQuizInPanel(Panel panel,
             List<Model.Ai.EssayQuestion> questions, int idx,
             Font fontQ, Font fontQB, Font fontS,
-            Action onCorrect, Action onWrong, Action onNext)
+            Action onCorrect, Action onWrong, Action onNext,
+            int reservedW = 0)
         {
             panel.Controls.Clear();
             var q = questions[idx];
             int pad = 8;
-            int cw = panel.ClientSize.Width - pad * 2;
+            int cw = panel.ClientSize.Width - pad * 2 - reservedW;   // reservedW：面板滚动条预留宽
 
             // 题目标签
             string qText = "Q" + (idx + 1) + ". " + q.Question;
@@ -1725,13 +1750,12 @@ namespace ToastFish.View
             for (int i = 0; i < q.Choices.Count; i++)
             {
                 string label = (char)('A' + i) + ". " + q.Choices[i];
-                int labelH = TextRenderer.MeasureText(label, fontS,
-                    new Size(btnW - 16, 9999),
-                    TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
-                int bH = Math.Max(34, labelH + 10);
+                // 先建按钮拿到它自己的可用宽度再量行高：Button 的边框+默认内边距（高 DPI 下更宽）
+                // 会吃掉可用宽度，之前用 btnW-16 量出的行数常比实际渲染少一行，第二行被下沿裁掉
+                // （2026-10-28：用户截图里 B 选项第二行被压到 C 选项上就是这个原因）
                 var b = new Button
                 {
-                    Text = label, Size = new Size(btnW, bH),
+                    Text = label, Size = new Size(btnW, 38),
                     Location = new Point(pad + 8, btnY),
                     BackColor = Color.FromArgb(44, 44, 60),
                     ForeColor = Color.FromArgb(200, 200, 200),
@@ -1739,6 +1763,12 @@ namespace ToastFish.View
                     TextAlign = ContentAlignment.MiddleLeft
                 };
                 b.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 90);
+                int measureW = Math.Max(40, b.ClientSize.Width - 8);
+                int labelH = TextRenderer.MeasureText(label, fontS,
+                    new Size(measureW, 9999),
+                    TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
+                int bH = Math.Max(38, labelH + 14);
+                b.Height = bH;
                 int cIdx = i;
                 b.Click += (s, e) =>
                 {
