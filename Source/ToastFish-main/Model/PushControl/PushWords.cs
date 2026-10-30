@@ -2080,7 +2080,8 @@ namespace ToastFish.Model.PushControl
                             fetched.EssayWords.Select(w => w.headWord).ToList(),
                             fetched.EssayWords, qs,
                             result => { quizResult = result; done.Set(); },
-                            0, json => { answersJson = json; });
+                            0, json => { answersJson = json; },
+                             fetched.Result.LongSentences, fetched.Result.Translations);
                         done.WaitOne(); // 阻塞直到用户完成阅读+测验
                         int attempted = (quizResult >> 16) & 0xFFFF;
                         int correct = quizResult & 0xFFFF;

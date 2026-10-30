@@ -241,12 +241,51 @@ namespace ToastFish.Model.Ai
         public int Answer = -1;   // 正确选项下标
     }
 
+    /// <summary>长难句拆解中的一个成分片段（2026-10-30）</summary>
+    public class LongSentencePart
+    {
+        public string Text;   // 原文片段（按原句顺序拼接即原句）
+        public string Type;   // 成分类型：主语/谓语/定语从句/状语从句/非谓语/插入语...
+        public string Role;   // 作用：修饰谁、干什么（中文短语）
+    }
+
+    /// <summary>长难句拆解结果（2026-10-30，考研英语精读）</summary>
+    public class LongSentence
+    {
+        public string Sentence;   // 原句
+        public string Main;       // 去掉修饰后的主干
+        public List<LongSentencePart> Parts = new List<LongSentencePart>();
+        public string Translation; // 整句中文
+    }
+
+    /// <summary>英译汉练习句（2026-10-30，考研英语精读）</summary>
+    public class TransItem
+    {
+        public string Sentence;   // 待译英文原句
+        public string Reference;  // 参考译文
+        public List<string> Points = new List<string>();  // 采分点
+    }
+
+    /// <summary>AI 对一次英译汉的评分（2026-10-30）</summary>
+    public class TransGrade
+    {
+        public double Score;               // 0~10（一位小数）
+        public List<string> Hits = new List<string>();   // 译对的要点
+        public List<string> Misses = new List<string>(); // 漏译/误译的要点
+        public string Comment;             // 总评（≤80 字）
+        public string Better;              // 改进译法
+    }
+
     /// <summary>AI 短文生成结果</summary>
     public class EssayResult
     {
         public string EssayEN;
         public string EssayCN;
         public List<EssayQuestion> Questions = new List<EssayQuestion>();
+        /// <summary>长难句拆解（仅考研词库生成，最多 2 条）</summary>
+        public List<LongSentence> LongSentences = new List<LongSentence>();
+        /// <summary>英译汉练习句（仅考研词库生成，最多 2 条）</summary>
+        public List<TransItem> Translations = new List<TransItem>();
     }
 
     /// <summary>15选10 完形填空候选词</summary>
@@ -259,7 +298,7 @@ namespace ToastFish.Model.Ai
     /// <summary>15选10 完形填空 AI 生成结果</summary>
     public class ClozeResult
     {
-        public string Text;     // 短文，含 [0]...[9] 挖空标记
+        public string Text;     // 短文，含 [1]...[10] 挖空标记（1-based，与 Candidates[].Blank 的 0~9 差 1）
         public string TextCN;   // 中文翻译
         public List<ClozeCandidate> Candidates = new List<ClozeCandidate>(); // 15个候选
     }
@@ -333,9 +372,10 @@ namespace ToastFish.Model.Ai
             "3) 5 题题型是否覆盖多种（细节理解/推理判断/例证/指代/词义句意猜测/主旨大意/作者态度 7 种，同一题型不超过 2 道）；" +
             "4) 词义/句意猜测题的被猜词是否出现在短文中但【不在用户单词列表内】（禁止猜用户学过的词）；" +
             "5) 短文是否自然连贯、确实用上了全部给定单词；" +
-            "6) 每题4个选项的长度是否严格均衡（单词数相同或仅相差1个；正确选项不得长于任何干扰项，否则视为长度泄露答案）。" +
+            "6) 每题4个选项的长度是否严格均衡（单词数相同或仅相差1个；正确选项不得长于任何干扰项，否则视为长度泄露答案）；" +
+            "7) long（长难句拆解）与 trans（英译汉练习）是否齐全：long 恰好2项、trans 恰好2项；long 每项的 s 必须是短文中的原句、parts 各片段依次拼接必须恰好等于 s、main 必须是不含修饰成分的主干；trans 每项的 s 也必须是短文中的原句、ref 是通顺中文、points 有 3~4 条。" +
             "若无问题，输出 {\"ok\":true}。" +
-            "若存在问题，输出修正后的完整 JSON（格式与输入一致：{\"en\":\"英文短文\",\"cn\":\"中文翻译\",\"questions\":[{\"q\":\"题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}）。" +
+            "若存在问题，输出修正后的完整 JSON（格式与输入一致：{\"en\":\"英文短文\",\"cn\":\"中文翻译\",\"questions\":[{\"q\":\"题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}],\"long\":[{\"s\":\"原句\",\"main\":\"主干\",\"parts\":[{\"t\":\"片段\",\"type\":\"成分类型\",\"fn\":\"作用\"}],\"tr\":\"整句中译\"}],\"trans\":[{\"s\":\"原句\",\"ref\":\"参考译文\",\"points\":[\"采分点\"]}]}）。" +
             "只输出 JSON。";
 
         /// <summary>修正轮 system prompt（15选10 CLOZE 版）。</summary>
@@ -355,7 +395,7 @@ namespace ToastFish.Model.Ai
 
         /// <summary>考研英语专用 system prompt（快速版）：学术议论文题材、长难句、7 题型、考研式干扰项。</summary>
         private const string SYS_PROMPT_KAOYAN =
-            "用户给出英语单词列表。完成两件事：" +
+            "用户给出英语单词列表。完成四件事：" +
             "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文（150~220词），" +
             "文体贴近考研英语（一）阅读理解 Part A：学术性议论文或说明文，题材选自人文社科、科技、经济、法律、心理等领域，" +
             "有明确的论点—论据—论证结构（可含让步、转折、因果、举例、对比），适当使用长难句（从句嵌套、非谓语、插入语、倒装），但表达必须自然地道，禁止为长而长的别扭句子。" +
@@ -367,12 +407,17 @@ namespace ToastFish.Model.Ai
             "b.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
             "c.干扰项须模仿考研英语真题的干扰方式并具有迷惑性，可综合使用：偷换概念（把部分换成整体、把可能换成必然、替换主语/宾语/程度或范围限定词）、以偏概全（把局部细节或例子当全文主旨）、无中生有（原文未提及或推不出的信息）、过度推断（在原文基础上主观延伸结论）、正反混淆（与原文观点相反）、过于绝对（only/never/all/everything 等绝对化表述）、杂糅拼凑（词都来自原文但组合成原文没有的新信息）；" +
             "d.每题4个选项（每个6~12个单词），只有1个正确，正确选项位置随机；4个选项长度必须严格均衡——单词数相同或仅相差1个，正确选项不得长于任何干扰项；为避免正确项天然偏长，正确选项要写得精炼，干扰项也必须写成结构完整的句子而非短语片段；任何选项明显偏长都会直接泄露答案，属于严重命题错误。" +
-            "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\",\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}" +
-            "，answer是正确选项下标(0~3)。只输出JSON。";
+            "3)从短文中挑2个最值得拆解的长难句（含从句嵌套/非谓语/插入语/倒装中的至少一种），逐句拆出结构：" +
+            "main=去掉所有修饰成分后剩下的核心主干（英文，只保留主谓宾，尽量短）；" +
+            "parts=按原句顺序把整句切成若干片段，每个片段{\"t\":原文片段,\"type\":成分类型,\"fn\":这个成分在句中的作用（中文短语，如\"修饰 the practice\"）}，各片段 t 依次拼接必须与原句完全一致（不得漏词、不得改词，只允许把相邻空格并进片段）；" +
+            "tr=整句的中文翻译。" +
+            "4)从短文中挑2个适合英译汉练习的句子（25~45词、含从句或非谓语、采分点密集），每句给：s=原句，ref=参考译文（通顺、符合考研翻译评分标准的中文），points=3~4 条采分点（中文，指明难点，如\"which 引导定语从句修饰 the practice\"\"非谓语作状语\"\"被动转主动\"）。" +
+            "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\",\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}],\"long\":[{\"s\":\"原句\",\"main\":\"主干\",\"parts\":[{\"t\":\"片段\",\"type\":\"成分类型\",\"fn\":\"作用\"}],\"tr\":\"整句中译\"}],\"trans\":[{\"s\":\"原句\",\"ref\":\"参考译文\",\"points\":[\"采分点\"]}]}" +
+            "，answer是正确选项下标(0~3)；questions 恰好5项，long 恰好2项，trans 恰好2项。只输出JSON。";
 
         /// <summary>考研英语专用 system prompt（推理版）。</summary>
         private const string SYS_PROMPT_REASON_KAOYAN =
-            "用户给出英语单词列表。完成两件事：" +
+            "用户给出英语单词列表。完成四件事：" +
             "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文，不设字数限制，篇幅按内容需要充分展开、不必刻意精简，" +
             "文体贴近考研英语（一）阅读理解 Part A：学术性议论文或说明文，题材选自人文社科、科技、经济、法律、心理等领域，" +
             "有明确的论点—论据—论证结构，内容有深度、值得一读，适当使用长难句（从句嵌套、非谓语、插入语）但表达自然地道。" +
@@ -384,8 +429,13 @@ namespace ToastFish.Model.Ai
             "b.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
             "c.干扰项须模仿考研英语真题的干扰方式并具有迷惑性，可综合使用：偷换概念（把部分换成整体、把可能换成必然、替换主语/宾语/程度或范围限定词）、以偏概全（把局部细节或例子当全文主旨）、无中生有（原文未提及或推不出的信息）、过度推断（在原文基础上主观延伸结论）、正反混淆（与原文观点相反）、过于绝对（only/never/all/everything 等绝对化表述）、杂糅拼凑（词都来自原文但组合成原文没有的新信息）；" +
             "d.每题4个选项（每个6~12个单词），只有1个正确，正确选项位置随机；4个选项长度必须严格均衡——单词数相同或仅相差1个，正确选项不得长于任何干扰项；为避免正确项天然偏长，正确选项要写得精炼，干扰项也必须写成结构完整的句子而非短语片段；任何选项明显偏长都会直接泄露答案，属于严重命题错误。" +
-            "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\",\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}" +
-            "，answer是正确选项下标(0~3)。只输出纯JSON文本，禁止用markdown代码块包裹。";
+            "3)从短文中挑2个最值得拆解的长难句（含从句嵌套/非谓语/插入语/倒装中的至少一种），逐句拆出结构：" +
+            "main=去掉所有修饰成分后剩下的核心主干（英文，只保留主谓宾，尽量短）；" +
+            "parts=按原句顺序把整句切成若干片段，每个片段{\"t\":原文片段,\"type\":成分类型,\"fn\":这个成分在句中的作用（中文短语，如\"修饰 the practice\"）}，各片段 t 依次拼接必须与原句完全一致（不得漏词、不得改词，只允许把相邻空格并进片段）；" +
+            "tr=整句的中文翻译。" +
+            "4)从短文中挑2个适合英译汉练习的句子（25~45词、含从句或非谓语、采分点密集），每句给：s=原句，ref=参考译文（通顺、符合考研翻译评分标准的中文），points=3~4 条采分点（中文，指明难点，如\"which 引导定语从句修饰 the practice\"\"非谓语作状语\"\"被动转主动\"）。" +
+            "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\",\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}],\"long\":[{\"s\":\"原句\",\"main\":\"主干\",\"parts\":[{\"t\":\"片段\",\"type\":\"成分类型\",\"fn\":\"作用\"}],\"tr\":\"整句中译\"}],\"trans\":[{\"s\":\"原句\",\"ref\":\"参考译文\",\"points\":[\"采分点\"]}]}" +
+            "，answer是正确选项下标(0~3)；questions 恰好5项，long 恰好2项，trans 恰好2项。只输出纯JSON文本，禁止用markdown代码块包裹。";
 
         /// <summary>考研英语专用 20空四选一 prompt（快速版）：逻辑连接词、固定搭配、上下文推理、语境辨析。</summary>
         private const string CLOZE_PROMPT_KAOYAN =
@@ -485,6 +535,14 @@ namespace ToastFish.Model.Ai
 
         /// <summary>最近一次流式读取是否因 max_tokens 耗尽被截断（finish_reason=length）。推理模式思考过长时触发。</summary>
         public static volatile bool LastTruncated = false;
+
+        /// <summary>
+        /// 上一次成功生成短文的对话记录（system prompt / 单词表 / 模型输出的 JSON）。
+        /// 英译汉评分时接在这段对话后面继续问，复用同一次上下文，而不是重新开一段新对话。
+        /// </summary>
+        public static string LastSysPrompt = null;
+        public static string LastUserContent = null;
+        public static string LastAssistantContent = null;
 
         /// <summary>当前活跃的 HTTP 请求，供 AbortActiveRequest 超时主动中止。</summary>
         private static volatile HttpWebRequest _activeRequest = null;
@@ -622,7 +680,7 @@ namespace ToastFish.Model.Ai
                 string sysPrompt = kaoyan ? SYS_PROMPT_KAOYAN : SYS_PROMPT.Replace("{LEVEL}", level);
                 string sysPromptReason = kaoyan ? SYS_PROMPT_REASON_KAOYAN : SYS_PROMPT_REASON.Replace("{LEVEL}", level);
                 bool reason = AiConfig.ModelMode == 1;
-                int maxTokens = kaoyan ? 2000 : 1400;  // 考研 5 题输出更长，上调上限防截断
+                int maxTokens = kaoyan ? 3200 : 1400;  // 考研 5 题 + 长难句拆解 + 英译汉，上调上限防截断
                 string body = BuildBody(reason ? sysPromptReason : sysPrompt,
                     string.Join(", ", words.ToArray()), reason, maxTokens);
 
@@ -656,6 +714,12 @@ namespace ToastFish.Model.Ai
                 // 修正轮：仅快速模式（推理模式 pro 本身深度思考，保持单轮控延迟/成本）
                 if (!reason)
                     ReviseEssay(words, bookName, ref result);
+
+                // 记住本轮"system + 单词表 + 生成结果"，评分时接着这段对话继续问，
+                // 既复用同一次上下文（遵循用户要求），也能命中服务端前缀缓存。
+                LastSysPrompt = sysPrompt;
+                LastUserContent = string.Join(", ", words.ToArray());
+                LastAssistantContent = SerializeEssay(result);
 
                 return true;
             }
@@ -870,6 +934,18 @@ namespace ToastFish.Model.Ai
         /// </summary>
         private static string BuildBody(string sysPrompt, string userContent, bool reason, int maxTokens)
         {
+            var msgs = new List<KeyValuePair<string, string>>();
+            msgs.Add(new KeyValuePair<string, string>("user", userContent));
+            return BuildBodyMessages(sysPrompt, msgs, reason, maxTokens);
+        }
+
+        /// <summary>
+        /// 多轮消息版：messages = system + 依次给出的 role/content。
+        /// 用于「英译汉评分」接着上一次生成短文的对话继续问（system 与单词表都相同 → 命中前缀缓存）。
+        /// </summary>
+        private static string BuildBodyMessages(string sysPrompt, List<KeyValuePair<string, string>> msgs,
+            bool reason, int maxTokens)
+        {
             bool kimi = AiConfig.Provider == AiConfig.ProviderKimi
                 || AiConfig.Provider == AiConfig.ProviderKimiCode;
             bool custom = AiConfig.Provider == AiConfig.ProviderCustom;
@@ -878,8 +954,10 @@ namespace ToastFish.Model.Ai
 
             var sb = new StringBuilder();
             sb.Append("{\"model\":\"").Append(JsonEscape(model)).Append("\",");
-            sb.Append("\"messages\":[{\"role\":\"system\",\"content\":\"").Append(JsonEscape(sysPrompt)).Append("\"},");
-            sb.Append("{\"role\":\"user\",\"content\":\"").Append(JsonEscape(userContent)).Append("\"}],");
+            sb.Append("\"messages\":[{\"role\":\"system\",\"content\":\"").Append(JsonEscape(sysPrompt)).Append("\"}");
+            foreach (var m in msgs)
+                sb.Append(",{\"role\":\"").Append(m.Key).Append("\",\"content\":\"").Append(JsonEscape(m.Value)).Append("\"}");
+            sb.Append("],");
 
             if (reason)
             {
@@ -971,7 +1049,7 @@ namespace ToastFish.Model.Ai
                 string user = string.Join(", ", words.ToArray()) + "\n\n当前短文与题目(JSON):\n" + SerializeEssay(result);
                 bool kaoyan = !string.IsNullOrEmpty(bookName) && bookName.StartsWith("KaoYan");
                 string revisePrompt = kaoyan ? REVISE_PROMPT_KAOYAN : REVISE_PROMPT.Replace("{LEVEL}", GetBookLevel(bookName));
-                string body = BuildBody(revisePrompt, user, false, kaoyan ? 2000 : 1400);
+                string body = BuildBody(revisePrompt, user, false, kaoyan ? 3200 : 1400);
                 string c, e;
                 if (!PostChat(body, false, out c, out e))
                     break;
@@ -980,10 +1058,127 @@ namespace ToastFish.Model.Ai
                 EssayResult revised;
                 string rerr;
                 if (ParseResult(c, out revised, out rerr))
+                {
+                    // 修正版偶尔会漏掉 long/trans（模型只重写了 en/cn/questions）。
+                    // 短文没变时这些练习仍然对得上，直接沿用上一版，避免"修一次就丢功能"。
+                    if (revised.EssayEN == result.EssayEN)
+                    {
+                        if (revised.LongSentences.Count == 0) revised.LongSentences = result.LongSentences;
+                        if (revised.Translations.Count == 0) revised.Translations = result.Translations;
+                    }
                     result = revised;
+                }
                 else
                     break;
             }
+        }
+
+        /// <summary>
+        /// 英译汉评分（2026-10-29）。沿用生成该短文的同一段对话：system(作文 prompt) + user(单词表)
+        /// + assistant(上一篇短文 JSON) + user(评分指令 + 学生译文)，既是"同一次对话"，也能命中服务端前缀缓存。
+        /// 没有上次记录时退化为自包含请求（把短文原文一起发过去），保证功能不失效。
+        /// </summary>
+        public static bool TryGradeTranslation(string essayEN, string sentence, string reference,
+            string userTranslation, out TransGrade grade, out string error)
+        {
+            grade = null; error = null;
+            LiveError = null;
+            AiConfig.Load();
+            if (string.IsNullOrEmpty(AiConfig.ApiKey)) { error = "未设置 API Key"; LiveError = error; return false; }
+            if (string.IsNullOrEmpty(userTranslation) || userTranslation.Trim().Length == 0)
+            {
+                error = "请先写下你的译文";
+                return false;
+            }
+
+            string task =
+                "现在批改学生这句英文的中文翻译。只批这一句，不要重新出题、不要改写短文。\n" +
+                "英文原句：" + (sentence ?? "") + "\n" +
+                "参考译文：" + (reference ?? "") + "\n" +
+                "学生译文：" + userTranslation.Trim() + "\n" +
+                "评分标准（满分 10 分）：意思准确 6 分（采分点是否译对、有无漏译误译）；中文通顺 2 分（符合汉语表达、无翻译腔）；结构与逻辑 2 分（从句关系、指代、修饰关系是否正确）。\n" +
+                "输出纯 JSON，不要 markdown 包裹：{\"score\":0到10的小数,\"hits\":[\"译对的采分点\"],\"misses\":[\"漏译或译错的地方，并给出正确意思\"],\"comment\":\"两三句总评，指出最大问题\",\"better\":\"一句更贴近参考译文的改进译法\"}。\n" +
+                "hits/misses/comment/better 全部用中文；score 保留一位小数。只输出 JSON。";
+
+            var msgs = new List<KeyValuePair<string, string>>();
+            string sys = LastSysPrompt;
+            if (!string.IsNullOrEmpty(sys) && !string.IsNullOrEmpty(LastAssistantContent)
+                && !string.IsNullOrEmpty(LastUserContent) && LastAssistantContent.Length < 12000)
+            {
+                msgs.Add(new KeyValuePair<string, string>("user", LastUserContent));
+                msgs.Add(new KeyValuePair<string, string>("assistant", LastAssistantContent));
+                msgs.Add(new KeyValuePair<string, string>("user", task));
+            }
+            else
+            {
+                sys = "你是考研英语翻译阅卷老师，按采分点给分，指出漏译与误译。只输出 JSON。";
+                string excerpt = essayEN ?? "";
+                if (excerpt.Length > 4000) excerpt = excerpt.Substring(0, 4000);
+                msgs.Add(new KeyValuePair<string, string>("user", "短文原文：\n" + excerpt + "\n\n" + task));
+            }
+
+            try
+            {
+                string body = BuildBodyMessages(sys, msgs, false, 700);
+                string content;
+                if (!PostChat(body, false, out content, out error))
+                {
+                    LiveError = error;
+                    return false;
+                }
+                if (!ParseTransGrade(content, out grade, out error))
+                {
+                    LiveError = error;
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                error = e.Message;
+                LiveError = error;
+                return false;
+            }
+        }
+
+        /// <summary>解析评分 JSON。字段缺失时给出可读错误，分数钳制到 0~10。</summary>
+        private static bool ParseTransGrade(string content, out TransGrade grade, out string error)
+        {
+            grade = null; error = null;
+            if (string.IsNullOrEmpty(content)) { error = "AI 返回内容为空"; return false; }
+            int lb = content.IndexOf('{');
+            int rb = content.LastIndexOf('}');
+            if (lb < 0 || rb <= lb) { error = "AI 返回的不是 JSON"; return false; }
+
+            Dictionary<string, object> doc;
+            try
+            {
+                doc = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                    content.Substring(lb, rb - lb + 1));
+            }
+            catch (Exception e) { error = "评分 JSON 解析失败: " + e.Message; return false; }
+            if (doc == null) { error = "评分 JSON 为空"; return false; }
+
+            var g = new TransGrade();
+            object v;
+            if (doc.TryGetValue("score", out v) && v != null)
+            {
+                try { g.Score = Convert.ToDouble(v); } catch { g.Score = 0; }
+            }
+            if (g.Score < 0) g.Score = 0;
+            if (g.Score > 10) g.Score = 10;
+
+            var hits = doc.TryGetValue("hits", out v) ? v as System.Collections.ArrayList : null;
+            if (hits != null)
+                foreach (object o in hits) { string s = o as string; if (!string.IsNullOrEmpty(s)) g.Hits.Add(s.Trim()); }
+            var misses = doc.TryGetValue("misses", out v) ? v as System.Collections.ArrayList : null;
+            if (misses != null)
+                foreach (object o in misses) { string s = o as string; if (!string.IsNullOrEmpty(s)) g.Misses.Add(s.Trim()); }
+
+            g.Comment = (GetStr(doc, "comment") ?? "").Trim();
+            g.Better = (GetStr(doc, "better") ?? "").Trim();
+            grade = g;
+            return true;
         }
 
         /// <summary>
@@ -1159,6 +1354,42 @@ namespace ToastFish.Model.Ai
                     sb.Append(JsonEscape(q.Choices[j]));
                 }
                 sb.Append("],\"answer\":").Append(q.Answer).Append("}");
+            }
+            sb.Append("]");
+
+            // 长难句拆解 / 英译汉练习：非考研库为空，输出空数组即可（prompt 侧按考研校验）
+            sb.Append(",\"long\":[");
+            for (int i = 0; i < r.LongSentences.Count; i++)
+            {
+                if (i > 0) sb.Append(",");
+                var it = r.LongSentences[i];
+                sb.Append("{\"s\":").Append(JsonEscape(it.Sentence));
+                sb.Append(",\"main\":").Append(JsonEscape(it.Main ?? ""));
+                sb.Append(",\"parts\":[");
+                for (int j = 0; j < it.Parts.Count; j++)
+                {
+                    if (j > 0) sb.Append(",");
+                    var pt = it.Parts[j];
+                    sb.Append("{\"t\":").Append(JsonEscape(pt.Text));
+                    sb.Append(",\"type\":").Append(JsonEscape(pt.Type ?? ""));
+                    sb.Append(",\"fn\":").Append(JsonEscape(pt.Role ?? "")).Append("}");
+                }
+                sb.Append("],\"tr\":").Append(JsonEscape(it.Translation ?? "")).Append("}");
+            }
+            sb.Append("],\"trans\":[");
+            for (int i = 0; i < r.Translations.Count; i++)
+            {
+                if (i > 0) sb.Append(",");
+                var it = r.Translations[i];
+                sb.Append("{\"s\":").Append(JsonEscape(it.Sentence));
+                sb.Append(",\"ref\":").Append(JsonEscape(it.Reference ?? ""));
+                sb.Append(",\"points\":[");
+                for (int j = 0; j < it.Points.Count; j++)
+                {
+                    if (j > 0) sb.Append(",");
+                    sb.Append(JsonEscape(it.Points[j]));
+                }
+                sb.Append("]}");
             }
             sb.Append("]}");
             return sb.ToString();
@@ -1466,8 +1697,95 @@ namespace ToastFish.Model.Ai
                 }
             }
 
+            // 长难句拆解（long）/ 英译汉练习（trans）：仅考研库生成，非考研库这两项为空。
+            // 校验：原句必须是短文里真实出现过的句子；长难句至少拆成 2 段且有主干；英译汉必须有参考译文。
+            object lsObj;
+            var ls = doc.TryGetValue("long", out lsObj) ? lsObj as System.Collections.ArrayList : null;
+            if (ls != null)
+            {
+                foreach (object lo in ls)
+                {
+                    if (r.LongSentences.Count >= 3) break;
+                    var ld = lo as Dictionary<string, object>;
+                    if (ld == null) continue;
+                    var item = new LongSentence();
+                    item.Sentence = (GetStr(ld, "s") ?? GetStr(ld, "sentence") ?? "").Trim();
+                    item.Main = (GetStr(ld, "main") ?? "").Trim();
+                    item.Translation = (GetStr(ld, "tr") ?? GetStr(ld, "translation") ?? "").Trim();
+                    object psObj;
+                    var ps = ld.TryGetValue("parts", out psObj) ? psObj as System.Collections.ArrayList : null;
+                    if (ps != null)
+                        foreach (object po in ps)
+                        {
+                            var pd = po as Dictionary<string, object>;
+                            if (pd == null) continue;
+                            var part = new LongSentencePart();
+                            part.Text = GetStr(pd, "t") ?? GetStr(pd, "text") ?? "";
+                            part.Type = (GetStr(pd, "type") ?? "").Trim();
+                            part.Role = (GetStr(pd, "fn") ?? GetStr(pd, "role") ?? "").Trim();
+                            if (!string.IsNullOrEmpty(part.Text)) item.Parts.Add(part);
+                        }
+                    if (item.Sentence.Length < 20) continue;
+                    if (item.Parts.Count < 2 || string.IsNullOrEmpty(item.Main)) continue;
+                    if (!ContainsLoose(r.EssayEN, item.Sentence)) continue;   // 原句必须出自短文
+                    r.LongSentences.Add(item);
+                }
+            }
+
+            object tsObj;
+            var ts = doc.TryGetValue("trans", out tsObj) ? tsObj as System.Collections.ArrayList : null;
+            if (ts != null)
+            {
+                foreach (object to in ts)
+                {
+                    if (r.Translations.Count >= 3) break;
+                    var td = to as Dictionary<string, object>;
+                    if (td == null) continue;
+                    var item = new TransItem();
+                    item.Sentence = (GetStr(td, "s") ?? GetStr(td, "sentence") ?? "").Trim();
+                    item.Reference = (GetStr(td, "ref") ?? GetStr(td, "reference") ?? "").Trim();
+                    object ptsObj;
+                    var pts = td.TryGetValue("points", out ptsObj) ? ptsObj as System.Collections.ArrayList : null;
+                    if (pts != null)
+                        foreach (object po in pts)
+                        {
+                            string sp = po as string;
+                            if (!string.IsNullOrEmpty(sp)) item.Points.Add(sp.Trim());
+                        }
+                    if (item.Sentence.Length < 20 || string.IsNullOrEmpty(item.Reference)) continue;
+                    if (!ContainsLoose(r.EssayEN, item.Sentence)) continue;
+                    r.Translations.Add(item);
+                }
+            }
+
             result = r;
             return true;
+        }
+
+        /// <summary>宽松包含判断：忽略大小写与连续空白差异，用于校验 AI 引用的原句确实出自短文。</summary>
+        private static bool ContainsLoose(string haystack, string needle)
+        {
+            if (string.IsNullOrEmpty(haystack) || string.IsNullOrEmpty(needle)) return false;
+            string a = Collapse(haystack);
+            string b = Collapse(needle);
+            if (b.Length < 8) return false;
+            return a.IndexOf(b, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string Collapse(string s)
+        {
+            var sb = new System.Text.StringBuilder(s.Length);
+            bool lastSpace = false;
+            foreach (char ch in s)
+            {
+                if (char.IsWhiteSpace(ch))
+                {
+                    if (!lastSpace) sb.Append(' ');
+                    lastSpace = true;
+                }
+                else { sb.Append(ch); lastSpace = false; }
+            }
+            return sb.ToString().Trim();
         }
 
         private static readonly Random _shuffleRng = new SafeRandom();

@@ -1031,11 +1031,15 @@ namespace ToastFish.View
             rtb.MouseUp += (s, e) =>
             {
                 if (e.Button != MouseButtons.Left) return;
+                var mk = rtb as MarkupRichTextBox;
+                if (mk != null && mk.MarkupEnabled) return;   // 划重点模式下拖动是划线，不能弹浏览器
                 string w = GetWordAtPosition(rtb, e.Location);
                 if (!string.IsNullOrEmpty(w)) OpenYoudaoDict(w);
             };
             rtb.MouseMove += (s, e) =>
             {
+                var mk = rtb as MarkupRichTextBox;
+                if (mk != null && mk.MarkupEnabled) { rtb.Cursor = Cursors.IBeam; return; }
                 string w = GetWordAtPosition(rtb, e.Location);
                 rtb.Cursor = string.IsNullOrEmpty(w) ? Cursors.IBeam : Cursors.Hand;
             };
@@ -1262,7 +1266,9 @@ namespace ToastFish.View
             List<string> highlightWords, List<ToastFish.Model.SqliteControl.Word> essayWords,
             List<Model.Ai.EssayQuestion> questions,
             Action<int> callback, int timeoutMs = TIMEOUT_READING,
-            Action<string> answersSink = null)
+            Action<string> answersSink = null,
+            List<Model.Ai.LongSentence> longSentences = null,
+            List<Model.Ai.TransItem> translations = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(-1); return; }
@@ -1272,12 +1278,14 @@ namespace ToastFish.View
                 // === Phase 1：阅读前信息页（2026-07-21） ===
                 if (essayWords != null && essayWords.Count > 0)
                 {
-                    ShowEssayInfoPage(essayEN, essayCN, highlightWords, essayWords, questions, callback, timeoutMs, answersSink);
+                    ShowEssayInfoPage(essayEN, essayCN, highlightWords, essayWords, questions, callback, timeoutMs, answersSink,
+                        longSentences, translations);
                     return;
                 }
 
                 // 无 Word 列表（回退）：直接进入 Phase 2（无测验）
-                ShowEssayContent(essayEN, essayCN, highlightWords, null, callback, timeoutMs, answersSink);
+                ShowEssayContent(essayEN, essayCN, highlightWords, null, callback, timeoutMs, answersSink,
+                    longSentences, translations);
             }));
         }
 
@@ -1285,7 +1293,9 @@ namespace ToastFish.View
         private static void ShowEssayInfoPage(string essayEN, string essayCN,
             List<string> highlightWords, List<ToastFish.Model.SqliteControl.Word> essayWords,
             List<Model.Ai.EssayQuestion> questions,
-            Action<int> callback, int timeoutMs, Action<string> answersSink = null)
+            Action<int> callback, int timeoutMs, Action<string> answersSink = null,
+            List<Model.Ai.LongSentence> longSentences = null,
+            List<Model.Ai.TransItem> translations = null)
         {
             // 关闭上一个弹窗（测验弹窗等）
             CloseMessageOverlays();
@@ -1369,7 +1379,8 @@ namespace ToastFish.View
                 if (phase2Entered) return;
                 phase2Entered = true;
                 form.Close();
-                ShowEssayContent(essayEN, essayCN, highlightWords, questions, callback, timeoutMs, answersSink);
+                ShowEssayContent(essayEN, essayCN, highlightWords, questions, callback, timeoutMs, answersSink,
+                    longSentences, translations);
             };
             btn.Click += (s, e) => enterPhase2();
             form.Controls.Add(btn);
@@ -1411,7 +1422,9 @@ namespace ToastFish.View
         /// <summary>Phase 2：短文阅读 + 内嵌测验（2026-07-21 重构）。</summary>
         private static void ShowEssayContent(string essayEN, string essayCN,
             List<string> highlightWords, List<Model.Ai.EssayQuestion> questions,
-            Action<int> callback, int timeoutMs, Action<string> answersSink = null)
+            Action<int> callback, int timeoutMs, Action<string> answersSink = null,
+            List<Model.Ai.LongSentence> longSentences = null,
+            List<Model.Ai.TransItem> translations = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(-1); return; }
@@ -1441,14 +1454,16 @@ namespace ToastFish.View
                 int formH = PAD_TOP + hTitle + LAYOUT_GAP + passageH + 8 + panelH_reading + 10;
                 formH = Math.Max(MIN_FORM_H, Math.Min(formH, CapH()));
 
-                var rtb = new RichTextBox
+                // 2026-10-29：正文用 MarkupRichTextBox，支持「划重点」多层下划线（见类定义）
+                var rtb = new MarkupRichTextBox
                 {
                     ReadOnly = true, BorderStyle = BorderStyle.None,
                     BackColor = Color.FromArgb(31, 31, 31),
                     ForeColor = Color.FromArgb(200, 200, 200),
                     Size = new Size(cw, passageH),
                     ScrollBars = RichTextBoxScrollBars.None,  // 占位；Shown 校正时按真实内容高度决定是否开启
-                    TabStop = false, DetectUrls = false, Font = fontSent
+                    TabStop = false, DetectUrls = false, Font = fontSent,
+                    HideSelection = false   // 弹窗不抢焦点，但拖动选中时仍要看见选区
                 };
                 rtb.RightMargin = cw - 28;
                 int essayContentH = 0;   // ContentsResized 报告的真实渲染高度（Shown 时已就绪，比 RealRtbHeight 更可靠）
@@ -1520,14 +1535,70 @@ namespace ToastFish.View
                 btnQuiz.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
                 bottomPanel.Controls.Add(btnQuiz);
 
-                // 布局阅读阶段按钮（「显示翻译」已移除，翻译见仪表盘 AI 短文历史页）
+                // ---- 划重点（2026-10-29）----
+                // 进入后拖动选中正文即划一条下划线；同一处可反复叠层、可部分错位，
+                // 层号按「与已有划线重叠」自动递增（越上层越往下错开 3px 并换色）。
+                // 右键擦掉该处最上面一条，「清除划线」一次清空。
+                var btnMarkup = new Button
+                {
+                    Text = "✎ 划重点", Size = new Size(150, btnH),   // 固定宽：划线计数变化时不挤动其它按钮
+                    BackColor = Color.FromArgb(51, 51, 51), ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat, Font = FONT_BTN
+                };
+                btnMarkup.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
+                bottomPanel.Controls.Add(btnMarkup);
+
+                var btnClearMarks = new Button
+                {
+                    Text = "清除划线", Size = new Size(96, btnH), Enabled = false,
+                    BackColor = Color.FromArgb(51, 51, 51), ForeColor = Color.FromArgb(200, 200, 200),
+                    FlatStyle = FlatStyle.Flat, Font = FONT_BTN
+                };
+                btnClearMarks.FlatAppearance.BorderColor = Color.FromArgb(85, 85, 85);
+                bottomPanel.Controls.Add(btnClearMarks);
+
+                // 布局阅读阶段按钮：[划重点] [清除划线] [读完了，开始测验]
+                //（「显示翻译」已移除，翻译见仪表盘 AI 短文历史页）
                 Action layoutReadingBtns = () =>
                 {
-                    int tw = btnQuiz.Width;
-                    int x = (bottomPanel.ClientSize.Width - tw) / 2;
+                    if (btnQuiz.Parent != bottomPanel) return;   // 测验阶段面板已被 ShowQuizInPanel 清空
+                    int gap = 10;
                     int by = (bottomPanel.ClientSize.Height - btnH) / 2;
+                    int total = btnMarkup.Width + gap + btnClearMarks.Width + gap + btnQuiz.Width;
+                    int x = Math.Max(6, (bottomPanel.ClientSize.Width - total) / 2);
+                    btnMarkup.Location = new Point(x, by);
+                    x += btnMarkup.Width + gap;
+                    btnClearMarks.Location = new Point(x, by);
+                    x += btnClearMarks.Width + gap;
                     btnQuiz.Location = new Point(x, by);
                 };
+
+                // 刷新划重点按钮的文案/配色与「清除划线」可见性（划线数量写在按钮上）
+                Action syncMarkupUi = () =>
+                {
+                    if (btnMarkup.Parent != bottomPanel) return;
+                    bool on = rtb.MarkupEnabled;
+                    int n = rtb.MarkCount;
+                    btnMarkup.Text = on ? (n > 0 ? "✎ 划线中 · " + n : "✎ 划线中") : "✎ 划重点";
+                    btnMarkup.BackColor = on ? Color.FromArgb(92, 72, 22) : Color.FromArgb(51, 51, 51);
+                    btnMarkup.ForeColor = on ? Color.FromArgb(255, 210, 100) : Color.White;
+                    // 清除按钮始终占位（布局不跳动），只在有划线时可点
+                    btnClearMarks.Enabled = n > 0;
+                    btnClearMarks.ForeColor = n > 0 ? Color.FromArgb(220, 220, 220) : Color.FromArgb(110, 110, 110);
+                    layoutReadingBtns();
+                };
+
+                btnMarkup.Click += (s, e) =>
+                {
+                    rtb.MarkupEnabled = !rtb.MarkupEnabled;
+                    if (!rtb.MarkupEnabled) rtb.SelectionLength = 0;
+                    rtb.Cursor = Cursors.IBeam;
+                    syncMarkupUi();
+                    btnMarkup.Focus();   // 焦点留在按钮上，正文不出现插入符
+                };
+                btnClearMarks.Click += (s, e) => { rtb.ClearMarks(); syncMarkupUi(); };
+                rtb.MarksChanged += (s, e) => syncMarkupUi();   // 画/擦一条就刷新计数（面板已清空时自动跳过）
+
                 layoutReadingBtns();
 
                 // === 阅读阶段布局校正（Shown 校正 + 「显示翻译」后共用） ===
@@ -1554,8 +1625,115 @@ namespace ToastFish.View
                     layoutReadingBtns();
                 };
 
-                // ====== 测验内嵌逻辑 ======
+                // ====== 面板排版：把「面板内容高 contentH」套进窗体 ======
+                // 规则：优先「短文全显示 + 面板全显示」；放不下就以 75% 屏高封顶，从短文让高给面板
+                //（短文区滚动），最后才让面板自己滚动（#108 / #111）。测验与精读共用这一套公式。
+                Action<int> fitPanel = contentH =>
+                {
+                    int rtbTop = rtb.Top;
+                    int essayH = Math.Max(60, rtb.Height);
+                    const int minPassageH = 150;             // 面板再高，短文也至少留这么高
+
+                    int wantH = rtbTop + essayH + 8 + contentH + 10;
+                    int fitFormH = Math.Min(wantH, CapH());
+                    int panelH_new = Math.Min(contentH, Math.Max(120, fitFormH - rtbTop - 18 - minPassageH));
+                    int passageH2 = fitFormH - rtbTop - 8 - panelH_new - 10;
+                    if (passageH2 < 60) passageH2 = 60;
+                    // 短文高对齐整行高，避免底部露出半行字（2026-10-28）
+                    int lineH2 = Math.Max(12, rtb.Font.Height);
+                    try
+                    {
+                        int i1 = rtb.GetFirstCharIndexFromLine(1);
+                        if (i1 > 0)
+                        {
+                            int dyy = rtb.GetPositionFromCharIndex(i1).Y - rtb.GetPositionFromCharIndex(0).Y;
+                            if (dyy > 0) lineH2 = dyy;   // RichEdit 实际行距（含段落间距）
+                        }
+                    }
+                    catch { }
+                    if (passageH2 % lineH2 != 0) passageH2 = Math.Max(60, (passageH2 / lineH2) * lineH2);
+                    fitFormH = Math.Min(CapH(), rtbTop + passageH2 + 8 + panelH_new + 10);
+
+                    bottomPanel.Location = new Point(pad, rtbTop + passageH2 + 8);
+                    bottomPanel.Height = panelH_new;
+                    rtb.Height = passageH2;
+
+                    bottomPanel.AutoScroll = contentH > panelH_new;
+                    bottomPanel.AutoScrollMinSize = contentH > panelH_new
+                        ? new Size(bottomPanel.ClientSize.Width, contentH) : Size.Empty;
+                    bottomPanel.AutoScrollPosition = new Point(0, 0);
+
+                    // 兜底（2026-10-29）：万一某环境下控件实际渲染高比量出来的高，
+                    // 以「面板底 + 10」为准把窗口再撑一下；撑到上限就让面板自己滚动。
+                    int needH = bottomPanel.Bottom + 10;
+                    if (needH > fitFormH)
+                    {
+                        int grown = Math.Min(needH, CapH());
+                        if (grown > fitFormH)
+                        {
+                            fitFormH = grown;
+                            passageH2 = Math.Max(60, fitFormH - rtbTop - 8 - panelH_new - 10);
+                            rtb.Height = passageH2;
+                            bottomPanel.Location = new Point(pad, rtbTop + passageH2 + 8);
+                        }
+                        if (bottomPanel.Bottom + 10 > Math.Min(CapH(), fitFormH))
+                        {
+                            panelH_new = Math.Max(120, Math.Min(CapH(), fitFormH) - rtbTop - 8 - passageH2 - 10);
+                            bottomPanel.Height = panelH_new;
+                            bottomPanel.AutoScroll = contentH > panelH_new;
+                            bottomPanel.AutoScrollMinSize = new Size(bottomPanel.ClientSize.Width, contentH);
+                        }
+                    }
+
+                    if (fitFormH != form.Height) { form.Height = fitFormH; form.Top = wa.Bottom - fitFormH - 20; }
+                    PopupForm.LogPopup("PANEL", string.Format(
+                        "contentH={0} formH={1} panelH={2} passageH={3} autoScroll={4}",
+                        contentH, fitFormH, bottomPanel.Height, rtb.Height, bottomPanel.AutoScroll));
+                };
+
+                // 清空底部面板（切阶段用）。Controls.Clear 不释放句柄，这里逐个 Dispose，
+                // 否则精读阶段的 TextBox/Label 会一直堆在窗口上。
+                Action clearBottomPanel = () =>
+                {
+                    bottomPanel.SuspendLayout();
+                    var olds = new System.Collections.Generic.List<Control>();
+                    foreach (Control c in bottomPanel.Controls) olds.Add(c);
+                    bottomPanel.Controls.Clear();
+                    foreach (Control c in olds) c.Dispose();
+                    bottomPanel.AutoScroll = false;
+                    bottomPanel.AutoScrollMinSize = Size.Empty;
+                    bottomPanel.AutoScrollPosition = new Point(0, 0);
+                    bottomPanel.ResumeLayout();
+                };
+
+                // 往底部面板加一条自动换行的文字，返回下一行的 y
+                Func<string, Font, Color, int, int, int> addPanelLabel = (text, fnt, col, y0, width) =>
+                {
+                    int h = MeasureH(text, fnt, width);
+                    var lb = new Label
+                    {
+                        Text = text, AutoSize = false,
+                        Location = new Point(8, y0),
+                        Size = new Size(width, h),
+                        ForeColor = col, BackColor = Color.Transparent,
+                        Font = fnt
+                    };
+                    bottomPanel.Controls.Add(lb);
+                    return y0 + h + 6;
+                };
+
+                // ====== 测验 + 精读 内嵌逻辑 ======
                 bool hasQuiz = (questions != null && questions.Count > 0);
+                // 精读（2026-10-29）：长难句拆解 + 英译汉（AI 评分）。只有考研库生成这两项，其余词库为空 → 行为不变。
+                var longList = longSentences ?? new List<Model.Ai.LongSentence>();
+                var transList = translations ?? new List<Model.Ai.TransItem>();
+                bool hasIntensive = longList.Count > 0 || transList.Count > 0;
+                var transGrades = new Model.Ai.TransGrade[transList.Count];   // 精读 ②：每句的评分结果（null = 未评）
+                var transInputs = new string[transList.Count];                // 精读 ②：每句的译文草稿
+                var transErrors = new string[transList.Count];                // 精读 ②：评分失败原因（显示给用户，便于自查 Key/网络）
+                Action closeIntensive = null;                                 // 精读收尾：与测验结束的 doClose 同一套回调
+                Action<int> showLongStage = null;                             // 精读 ①：长难句拆解（下方定义）
+                Action<int> showTransStage = null;                            // 精读 ②：英译汉 + AI 评分
 
                 // 修正按钮文案（创建时用了默认文案）
                 btnQuiz.Text = hasQuiz ? "读完了，开始测验 (ALT+1)" : "读完了 (ALT+1)";
@@ -1568,6 +1746,9 @@ namespace ToastFish.View
                     if (quizIdx >= 0) return;
                     if (!hasQuiz) { form.Close(); callback(0); return; }
                     quizIdx = 0;
+                    // 划重点开关属于阅读阶段：进测验后面板按钮被清空，这里顺手关掉模式（已画的下划线保留）
+                    rtb.MarkupEnabled = false;
+                    rtb.SelectionLength = 0;
 
                     // 测验阶段的短文 / 面板 / 窗体高度全部交由 showNext 按「题目真实内容高」决定
                     // （2026-10-28 修复：旧实现先写死 panelH=220 再排版，长选项必然被面板下沿裁掉）
@@ -1590,70 +1771,23 @@ namespace ToastFish.View
                     {
                         if (qi < questions.Count)
                         {
-                            int rtbTop = rtb.Top;
-                            int essayH = Math.Max(60, rtb.Height);   // 阅读阶段实际短文高（尽量保留）
-                            const int minPassageH = 150;             // 测验阶段短文至少留这么高
-                            int sbW = SystemInformation.VerticalScrollBarWidth + 2;
-
                             // 先按满宽排版量真实内容高；若放不下（需要面板滚动），预留滚动条宽度重排一次，
                             // 避免滚动条压住选项右边缘（2026-10-28）
+                            int sbW = SystemInformation.VerticalScrollBarWidth + 2;
                             int qContentH = ShowQuizInPanel(bottomPanel, questions, qi, fontQuiz, fontQuizB, fontSmall,
                                 onAnswer, () => { qi++; showNext(); });
-                            int maxPanelH = CapH() - rtbTop - minPassageH - 18;
+                            int maxPanelH = CapH() - rtb.Top - 150 - 18;
                             if (qContentH > maxPanelH)
                             {
                                 qContentH = ShowQuizInPanel(bottomPanel, questions, qi, fontQuiz, fontQuizB, fontSmall,
                                     onAnswer, () => { qi++; showNext(); }, sbW);
                             }
-
-                            // 窗口高度：优先「短文全显示 + 选项全显示」，放不下就以 75% 屏高封顶，
-                            // 再从短文里让出高度给面板（短文区自带滚动条）
-                            int wantH = rtbTop + essayH + 8 + qContentH + 10;
-                            int quizFormH = Math.Min(wantH, CapH());
-                            int panelH_new = Math.Min(qContentH, Math.Max(120, quizFormH - rtbTop - 18 - minPassageH));
-                            int passageH2 = quizFormH - rtbTop - 8 - panelH_new - 10;
-                            if (passageH2 < 60) passageH2 = 60;
-                            // 短文高对齐整行高，避免底部露出半行被裁的字（2026-10-28）
-                            int lineH2 = Math.Max(12, rtb.Font.Height);
-                            try
-                            {
-                                int i1 = rtb.GetFirstCharIndexFromLine(1);
-                                if (i1 > 0)
-                                {
-                                    int dy = rtb.GetPositionFromCharIndex(i1).Y - rtb.GetPositionFromCharIndex(0).Y;
-                                    if (dy > 0) lineH2 = dy;   // RichEdit 实际行距（含段落间距）
-                                }
-                            }
-                            catch { }
-                            if (passageH2 % lineH2 != 0) passageH2 = Math.Max(60, (passageH2 / lineH2) * lineH2);
-                            quizFormH = Math.Min(CapH(), rtbTop + passageH2 + 8 + panelH_new + 10);
-
-                            bottomPanel.Location = new Point(pad, rtbTop + passageH2 + 8);
-                            bottomPanel.Height = panelH_new;
-                            rtb.Height = passageH2;
-
-                            bottomPanel.AutoScroll = qContentH > panelH_new;
-                            bottomPanel.AutoScrollMinSize = qContentH > panelH_new
-                                ? new Size(bottomPanel.ClientSize.Width, qContentH) : Size.Empty;
-                            bottomPanel.AutoScrollPosition = new Point(0, 0); // 切题滚回顶部
-
-                            if (quizFormH != form.Height) { form.Height = quizFormH; form.Top = wa.Bottom - quizFormH - 20; }
+                            // 窗口高度 / 短文稿 / 面板高 全部交给 fitPanel（与精读阶段共用）
+                            fitPanel(qContentH);
                         }
                         else
                         {
                             ShowQuizSummary(bottomPanel, cc, ac, fontQuiz);
-                            // 「关闭」按钮（双保险：点击或 5 秒后自动关闭）
-                            var closeBtn = new Button
-                            {
-                                Text = "关闭 (5s 后自动关闭)",
-                                Size = new Size(bottomPanel.ClientSize.Width - 16, 36),
-                                Location = new Point(8, bottomPanel.ClientSize.Height - 44),
-                                BackColor = Color.FromArgb(0, 100, 70),
-                                ForeColor = Color.FromArgb(200, 255, 220),
-                                FlatStyle = FlatStyle.Flat,
-                                Font = FONT_BTN
-                            };
-                            closeBtn.FlatAppearance.BorderColor = Color.FromArgb(0, 150, 100);
                             bool closed = false;
                             Action doClose = () =>
                             {
@@ -1661,15 +1795,282 @@ namespace ToastFish.View
                                 answersSink?.Invoke(BuildChoiceAnswersJson(picks, questions));
                                 form.Close(); callback((ac << 16) | cc);
                             };
-                            closeBtn.Click += (s2, e2) => doClose();
-                            bottomPanel.Controls.Add(closeBtn);
-                            // 备用定时器（WinForms Timer 偶发不触发，按钮兜底）
-                            var closeTimer = new System.Windows.Forms.Timer { Interval = 5000 };
-                            closeTimer.Tick += (s2, e2) => { closeTimer.Stop(); doClose(); };
-                            closeTimer.Start();
+                            closeIntensive = doClose;   // 精读走完也回到这里收尾
+
+                            if (hasIntensive)
+                            {
+                                // 有精读材料：不自动关闭，给「开始精读」和「关闭」两个按钮（2026-10-29）
+                                int gap2 = 10;
+                                int bw2 = Math.Max(90, (bottomPanel.ClientSize.Width - 16 - gap2) / 2);
+                                int by2 = bottomPanel.ClientSize.Height - 44;
+                                var goBtn = new Button
+                                {
+                                    Text = longList.Count > 0 ? "开始精读：长难句拆解" : "开始精读：英译汉",
+                                    Size = new Size(bw2, 36),
+                                    Location = new Point(8, by2),
+                                    BackColor = Color.FromArgb(26, 60, 102),
+                                    ForeColor = Color.FromArgb(200, 232, 255),
+                                    FlatStyle = FlatStyle.Flat,
+                                    Font = FONT_BTN
+                                };
+                                goBtn.FlatAppearance.BorderColor = Color.FromArgb(60, 140, 220);
+                                goBtn.Click += (s2, e2) =>
+                                {
+                                    clearBottomPanel();
+                                    if (longList.Count > 0) showLongStage(0); else showTransStage(0);
+                                };
+                                bottomPanel.Controls.Add(goBtn);
+
+                                var closeBtn2 = new Button
+                                {
+                                    Text = "关闭",
+                                    Size = new Size(bw2, 36),
+                                    Location = new Point(8 + bw2 + gap2, by2),
+                                    BackColor = Color.FromArgb(0, 100, 70),
+                                    ForeColor = Color.FromArgb(200, 255, 220),
+                                    FlatStyle = FlatStyle.Flat,
+                                    Font = FONT_BTN
+                                };
+                                closeBtn2.FlatAppearance.BorderColor = Color.FromArgb(0, 150, 100);
+                                closeBtn2.Click += (s2, e2) => doClose();
+                                bottomPanel.Controls.Add(closeBtn2);
+                            }
+                            else
+                            {
+                                // 无精读材料（非考研词库）：保持原来的 5 秒自动关闭
+                                var closeBtn = new Button
+                                {
+                                    Text = "关闭 (5s 后自动关闭)",
+                                    Size = new Size(bottomPanel.ClientSize.Width - 16, 36),
+                                    Location = new Point(8, bottomPanel.ClientSize.Height - 44),
+                                    BackColor = Color.FromArgb(0, 100, 70),
+                                    ForeColor = Color.FromArgb(200, 255, 220),
+                                    FlatStyle = FlatStyle.Flat,
+                                    Font = FONT_BTN
+                                };
+                                closeBtn.FlatAppearance.BorderColor = Color.FromArgb(0, 150, 100);
+                                closeBtn.Click += (s2, e2) => doClose();
+                                bottomPanel.Controls.Add(closeBtn);
+                                // 备用定时器（WinForms Timer 偶发不触发，按钮兜底）
+                                var closeTimer = new System.Windows.Forms.Timer { Interval = 5000 };
+                                closeTimer.Tick += (s2, e2) => { closeTimer.Stop(); doClose(); };
+                                closeTimer.Start();
+                            }
                         }
                     };
                     showNext();
+                };
+
+// ====== 精读 ①：长难句拆解 ======
+                // 只读展示：原句 / 主干 / 逐段成分（类型 + 片段 + 作用）/ 整句翻译，逐句翻页。
+                showLongStage = idx =>
+                {
+                    if (idx < 0) idx = 0;
+                    if (longList.Count == 0 || idx >= longList.Count) { if (transList.Count > 0) showTransStage(0); else closeIntensive(); return; }
+                    clearBottomPanel();
+                    int sbW2 = SystemInformation.VerticalScrollBarWidth + 2;
+                    int contentW = Math.Max(120, cw - 16 - sbW2);
+                    var ls = longList[idx];
+
+                    int yy = 8;
+                    yy = addPanelLabel(string.Format("长难句拆解 {0}/{1}", idx + 1, longList.Count),
+                        fontQuizB, Color.FromArgb(120, 200, 255), yy, contentW);
+                    yy = addPanelLabel(ls.Sentence, fontSentB, Color.FromArgb(235, 235, 240), yy, contentW);
+                    yy += 2;
+                    yy = addPanelLabel("主干：" + ls.Main, fontQuiz, Color.FromArgb(255, 210, 120), yy, contentW);
+                    if (ls.Parts != null)
+                    {
+                        foreach (var pt in ls.Parts)
+                        {
+                            yy = addPanelLabel("【" + pt.Type + "】" + pt.Text,
+                                fontSmall, Color.FromArgb(205, 205, 215), yy, contentW);
+                            if (!string.IsNullOrEmpty(pt.Role))
+                                yy = addPanelLabel("　　" + pt.Role, fontSmall, Color.FromArgb(150, 150, 168), yy, contentW);
+                        }
+                    }
+                    if (!string.IsNullOrEmpty(ls.Translation))
+                        yy = addPanelLabel("翻译：" + ls.Translation, fontSmall, Color.FromArgb(160, 230, 182), yy, contentW);
+
+                    int gap2 = 10;
+                    int bw2 = Math.Max(80, (contentW - gap2) / 2);
+                    int yyBtn = yy + 2;
+                    var prevBtn = new Button
+                    {
+                        Text = "上一句", Size = new Size(bw2, 36), Location = new Point(8, yyBtn),
+                        Enabled = idx > 0,
+                        BackColor = Color.FromArgb(51, 51, 51), ForeColor = Color.FromArgb(220, 220, 220),
+                        FlatStyle = FlatStyle.Flat, Font = FONT_BTN
+                    };
+                    prevBtn.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 100);
+                    prevBtn.Click += (s2, e2) => showLongStage(idx - 1);
+                    bottomPanel.Controls.Add(prevBtn);
+
+                    var nextBtn = new Button
+                    {
+                        Text = idx + 1 < longList.Count ? "下一句" : (transList.Count > 0 ? "进入英译汉" : "完成精读"),
+                        Size = new Size(bw2, 36), Location = new Point(8 + bw2 + gap2, yyBtn),
+                        BackColor = Color.FromArgb(26, 60, 102), ForeColor = Color.FromArgb(200, 232, 255),
+                        FlatStyle = FlatStyle.Flat, Font = FONT_BTN
+                    };
+                    nextBtn.FlatAppearance.BorderColor = Color.FromArgb(60, 140, 220);
+                    nextBtn.Click += (s2, e2) =>
+                    {
+                        if (idx + 1 < longList.Count) showLongStage(idx + 1);
+                        else if (transList.Count > 0) showTransStage(0);
+                        else closeIntensive();
+                    };
+                    bottomPanel.Controls.Add(nextBtn);
+
+                    fitPanel(yyBtn + 36 + 8);
+                };
+
+                // ====== 精读 ②：英译汉 + AI 评分 ======
+                // 用户手打译文 → 提交给 AI（复用同一段短文那次对话，见 EssayGenerator.TryGradeTranslation）
+                // → 显示得分 / 命中要点 / 漏译要点 / 总评 / 改进译法。
+                // 导航按钮放在面板顶部：评分结果可能比面板高（要滚动），按钮固定在最上面才点得到。
+                showTransStage = idx =>
+                {
+                    if (idx < 0) idx = 0;
+                    if (transList.Count == 0 || idx >= transList.Count) { closeIntensive(); return; }
+                    clearBottomPanel();
+                    int sbW2 = SystemInformation.VerticalScrollBarWidth + 2;
+                    int contentW = Math.Max(120, cw - 16 - sbW2);
+                    var it = transList[idx];
+
+                    int yy = 8;
+                    yy = addPanelLabel(string.Format("英译汉 {0}/{1}　把下面这句译成中文，AI 来评分", idx + 1, transList.Count),
+                        fontQuizB, Color.FromArgb(120, 200, 255), yy, contentW);
+
+                    int gap3 = 10;
+                    int bw3 = Math.Max(80, (contentW - gap3) / 2);
+                    TextBox txt = null;
+
+                    var prevBtn = new Button
+                    {
+                        Text = "← 上一句", Size = new Size(bw3, 34), Location = new Point(8, yy),
+                        Enabled = idx > 0,
+                        BackColor = Color.FromArgb(51, 51, 51), ForeColor = Color.FromArgb(220, 220, 220),
+                        FlatStyle = FlatStyle.Flat, Font = FONT_BTN
+                    };
+                    prevBtn.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 100);
+                    prevBtn.Click += (s2, e2) =>
+                    {
+                        if (txt != null) transInputs[idx] = txt.Text;
+                        showTransStage(idx - 1);
+                    };
+                    bottomPanel.Controls.Add(prevBtn);
+
+                    var nextBtn = new Button
+                    {
+                        Text = idx + 1 < transList.Count ? "下一句 →" : "完成精读",
+                        Size = new Size(bw3, 34), Location = new Point(8 + bw3 + gap3, yy),
+                        BackColor = Color.FromArgb(0, 100, 70), ForeColor = Color.FromArgb(200, 255, 220),
+                        FlatStyle = FlatStyle.Flat, Font = FONT_BTN
+                    };
+                    nextBtn.FlatAppearance.BorderColor = Color.FromArgb(0, 150, 100);
+                    nextBtn.Click += (s2, e2) =>
+                    {
+                        if (txt != null) transInputs[idx] = txt.Text;
+                        if (idx + 1 < transList.Count) showTransStage(idx + 1); else closeIntensive();
+                    };
+                    bottomPanel.Controls.Add(nextBtn);
+                    yy += 34 + 8;
+
+                    yy = addPanelLabel(it.Sentence, fontSentB, Color.FromArgb(235, 235, 240), yy, contentW);
+                    yy += 2;
+
+                    txt = new TextBox
+                    {
+                        Multiline = true,
+                        ScrollBars = ScrollBars.Vertical,
+                        Size = new Size(contentW, 96),
+                        Location = new Point(8, yy),
+                        BackColor = Color.FromArgb(44, 44, 60),
+                        ForeColor = Color.White,
+                        BorderStyle = BorderStyle.FixedSingle,
+                        Font = fontSent,
+                        Text = transInputs[idx] ?? ""
+                    };
+                    bottomPanel.Controls.Add(txt);
+                    yy += 96 + 6;
+
+                    var grade = transGrades[idx];
+                    var submitBtn = new Button
+                    {
+                        Text = grade != null ? "重新评分" : "提交 AI 评分",
+                        Size = new Size(contentW, 36),
+                        Location = new Point(8, yy),
+                        BackColor = Color.FromArgb(26, 60, 102),
+                        ForeColor = Color.FromArgb(200, 232, 255),
+                        FlatStyle = FlatStyle.Flat,
+                        Font = FONT_BTN
+                    };
+                    submitBtn.FlatAppearance.BorderColor = Color.FromArgb(60, 140, 220);
+                    bottomPanel.Controls.Add(submitBtn);
+                    yy += 36 + 8;
+
+                    if (grade != null)
+                    {
+                        yy = addPanelLabel(string.Format("得分：{0:0.#}/10", grade.Score),
+                            fontQuizB, Color.FromArgb(255, 210, 120), yy, contentW);
+                        if (grade.Hits != null && grade.Hits.Count > 0)
+                            yy = addPanelLabel("命中要点：" + string.Join("；", grade.Hits.ToArray()),
+                                fontSmall, Color.FromArgb(160, 230, 182), yy, contentW);
+                        if (grade.Misses != null && grade.Misses.Count > 0)
+                            yy = addPanelLabel("漏译/欠准：" + string.Join("；", grade.Misses.ToArray()),
+                                fontSmall, Color.FromArgb(255, 150, 160), yy, contentW);
+                        if (!string.IsNullOrEmpty(grade.Comment))
+                            yy = addPanelLabel("总评：" + grade.Comment, fontSmall, Color.FromArgb(205, 205, 215), yy, contentW);
+                        if (!string.IsNullOrEmpty(grade.Better))
+                            yy = addPanelLabel("参考译法：" + grade.Better, fontSmall, Color.FromArgb(160, 200, 255), yy, contentW);
+                    }
+                    if (!string.IsNullOrEmpty(transErrors[idx]))
+                        yy = addPanelLabel("评分失败：" + transErrors[idx], fontSmall, Color.FromArgb(255, 150, 160), yy, contentW);
+
+                    var txtRef = txt;
+                    submitBtn.Click += (s2, e2) =>
+                    {
+                        string mine = (txtRef.Text ?? "").Trim();
+                        transInputs[idx] = mine;
+                        if (mine.Length == 0) { submitBtn.Text = "先写下你的译文"; return; }
+                        submitBtn.Enabled = false;
+                        submitBtn.Text = "AI 评分中…";
+                        string sentence = it.Sentence, reference = it.Reference;
+                        System.Threading.Tasks.Task.Run(() =>
+                        {
+                            Model.Ai.TransGrade g = null; string err = null;
+                            bool ok = Model.Ai.EssayGenerator.TryGradeTranslation(
+                                essayEN, sentence, reference, mine, out g, out err);
+                            return new object[] { ok, g, err };
+                        }).ContinueWith(t =>
+                        {
+                            object[] res = null;
+                            try { res = t.Result; } catch { }
+                            try
+                            {
+                                form.BeginInvoke(new Action(() =>
+                                {
+                                    if (form.IsDisposed) return;
+                                    bool ok = res != null && (bool)res[0];
+                                    var g = res != null ? res[1] as Model.Ai.TransGrade : null;
+                                    if (ok && g != null) { transGrades[idx] = g; transErrors[idx] = null; showTransStage(idx); }
+                                    else
+                                    {
+                                        transErrors[idx] = res != null ? (res[2] as string) : null;
+                                        if (!form.IsDisposed)
+                                        {
+                                            submitBtn.Enabled = true;
+                                            submitBtn.Text = "评分失败，点此重试";
+                                        }
+                                    }
+                                }));
+                            }
+                            catch { }
+                        });
+                    };
+
+                    // 结果可能很高：超出面板时 fitPanel 会让面板自己滚动，滚动条宽度已在 contentW 预留
+                    fitPanel(yy + 4);
                 };
 
                 btnQuiz.Click += (s, e) => startQuiz();
@@ -1779,10 +2180,41 @@ namespace ToastFish.View
                     TextAlign = ContentAlignment.MiddleLeft
                 };
                 b.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 90);
-                int measureW = Math.Max(40, b.ClientSize.Width - 8);
-                int labelH = TextRenderer.MeasureText(label, fontS,
-                    new Size(measureW, 9999),
-                    TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
+
+                // 量行高必须用「按钮自己绘图时用的那个 DC」：
+                // 静态 TextRenderer.MeasureText(...) 取的是屏幕 DC（GetDC(NULL)），在
+                // 高 DPI / 缩放比例非 100% 的机器上它和窗口 DC 的 DPI 未必一致 ——
+                // 一旦量出的字宽比实际绘制的小，就会量成 1 行、实际画出 2 行，第二行被按钮下沿裁掉
+                // （2026-10-29 用户报的 D 选项「prevention.」只露一半就是这个：
+                //   按钮高 38=1 行，实际渲染 2 行）。
+                // 同时多留 18px 保守量（比按钮真实文字区再窄 18px 量一次，取更高者），
+                // 吸收 GDI 取整/字体 hinting 在临界宽度上的抖动 —— 宁可按钮高 4px，也不能裁字。
+                panel.Controls.Add(b);
+                int measureW = Math.Max(40, b.ClientSize.Width - 14);
+                int labelH;
+                using (var mg = b.CreateGraphics())
+                {
+                    int h1 = TextRenderer.MeasureText(mg, label, fontS,
+                        new Size(measureW, 9999),
+                        TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
+                    int h2 = TextRenderer.MeasureText(mg, label, fontS,
+                        new Size(Math.Max(40, measureW - 12), 9999),
+                        TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
+                    labelH = Math.Max(h1, h2);
+                }
+                // 记录每个选项的量算结果（用户复现时 popup.log 里能直接看到「量成几行 / 按钮多高」）
+                try
+                {
+                    using (var ng = b.CreateGraphics())
+                    {
+                        PopupForm.LogPopup("QUIZOPT", string.Format(
+                            "i={0} clientW={1} measureW={2} natW={3} labelH={4} bH={5} text={6}",
+                            i, b.ClientSize.Width, measureW,
+                            TextRenderer.MeasureText(ng, label, fontS).Width, labelH, Math.Max(38, labelH + 14),
+                            label.Length > 40 ? label.Substring(0, 40) : label));
+                    }
+                }
+                catch { }
                 int bH = Math.Max(38, labelH + 14);
                 b.Height = bH;
                 int cIdx = i;
@@ -1834,10 +2266,22 @@ namespace ToastFish.View
                     delay.Tick += (s2, e2) => { delay.Stop(); delay.Dispose(); onNext(); };
                     delay.Start();
                 };
-                panel.Controls.Add(b);
                 choiceBtns.Add(b);
                 btnY += bH + 4;
             }
+
+            // 诊断（2026-10-29）：把 DPI / 字体行高 / 每个选项的量得高与实际高写进 popup.log，
+            // 万一还有「量 1 行画 2 行」的机器，日志能直接定位是 DC 的 DPI 不一致还是字体问题
+            try
+            {
+                using (var dg = panel.CreateGraphics())
+                {
+                    PopupForm.LogPopup("QUIZ", string.Format(
+                        "dpi={0} gfxDpi={1} fontH={2} fontPt={3} panelW={4} qH={5} contentH={6}",
+                        panel.DeviceDpi, dg.DpiX, fontS.Height, fontS.Size, panel.ClientSize.Width, qH, btnY + 8));
+                }
+            }
+            catch { }
 
             // 返回该题所需内容高（顶部8 + 题目 + 结果条 + 选项 + 底部8）
             return btnY + 8;
@@ -2156,7 +2600,7 @@ namespace ToastFish.View
                 Label subtitleLbl = null;
                 RichTextBox translateLbl = null;   // 翻译区（RTB 支持内容超高时自身滚动）
                 Label blankLabel = null; Label candLabel = null;
-                FlowLayoutPanel blankPanel = null; FlowLayoutPanel candPanel = null;
+                TableLayoutPanel blankPanel = null; FlowLayoutPanel candPanel = null;
                 int blankHintH = 0; int candHintH = 0;
                 System.Windows.Forms.Timer clTimer = null;
                 Button[] blankBtns = new Button[10];
@@ -2249,7 +2693,8 @@ namespace ToastFish.View
                     {
                         if (filledWords[b] != null)
                         {
-                            blankBtns[b].Text = (b + 1) + ". " + filledWords[b];
+                            // 只显示序号（#113）：带词会撑宽按钮，5 列网格就会被挤出面板
+                            blankBtns[b].Text = (b + 1).ToString();
                             blankBtns[b].BackColor = submitted
                                 ? (filledWords[b] == correctWords[b] ? Color.FromArgb(0, 90, 50) : Color.FromArgb(90, 20, 40))
                                 : Color.FromArgb(0, 70, 50);
@@ -2319,7 +2764,7 @@ namespace ToastFish.View
                 int titleH = 32;
                 blankHintH = MeasureH("空位（点选后→再点候选词填入；再点已填空位可撤销）：", fontSmall, passageW) + 3;
                 candHintH = MeasureH("候选词（点选后→再点空位填入；也可先点空位→再点候选词）：", fontSmall, passageW) + 3;
-                int blankBarH = 38;
+                int blankBarH = 62;   // 5 列 × 2 行固定网格（#113：按钮只显示序号，填词后不再撑宽被裁）
                 int candBarH = 130;
                 int statusH = 28;
                 int submitBtnH = 38;
@@ -2381,21 +2826,29 @@ form.PlaceBottomRight();
                 form.Controls.Add(blankLabel);
                 y += blankHintH + 1;
 
-                blankPanel = new FlowLayoutPanel
+                // 固定 5 列 × 2 行网格（#113）：FlowLayoutPanel + 定宽按钮在填入长单词后按钮变宽，
+                // 超出面板的部分会被直接裁掉（WrapContents=false 且无滚动条），空位 6~10 就点不到了。
+                blankPanel = new TableLayoutPanel
                 {
                     Location = new Point(pad, y),
                     Size = new Size(passageW, blankBarH),
                     BackColor = Color.FromArgb(28, 28, 42),
-                    FlowDirection = FlowDirection.LeftToRight,
-                    WrapContents = false
+                    ColumnCount = 5,
+                    RowCount = 2,
+                    Margin = new Padding(0),
+                    Padding = new Padding(0)
                 };
+                for (int c = 0; c < 5; c++)
+                    blankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f));
+                blankPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+                blankPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
                 for (int b = 0; b < 10; b++)
                 {
                     int bi = b;
                     var btn = new Button
                     {
                         Text = (b + 1).ToString(),
-                        Size = new Size(54, 28),
+                        Dock = DockStyle.Fill,
                         BackColor = Color.FromArgb(44, 44, 60),
                         ForeColor = Color.FromArgb(180, 180, 180),
                         FlatStyle = FlatStyle.Flat,
@@ -2435,7 +2888,7 @@ form.PlaceBottomRight();
                         RefreshSubmitBtn();
                         UpdateSubtitle();
                     };
-                    blankPanel.Controls.Add(btn);
+                    blankPanel.Controls.Add(btn, b % 5, b / 5);
                     blankBtns[b] = btn;
                 }
                 form.Controls.Add(blankPanel);
@@ -2764,7 +3217,7 @@ form.PlaceBottomRight();
                 Button submitBtn = null;
                 Label subtitleLbl = null;
                 Label blankLabel = null; Label optLabel = null;
-                FlowLayoutPanel blankPanel = null; FlowLayoutPanel optPanel = null;
+                TableLayoutPanel blankPanel = null; TableLayoutPanel optPanel = null;
                 int blankHintH = 0; int optHintH = 0;
                 System.Windows.Forms.Timer clTimer = null;
                 Button[] blankBtns = new Button[20];
@@ -2794,10 +3247,11 @@ form.PlaceBottomRight();
                     {
                         string marker = "[" + i + "]";
                         string repl;
+                        // 标记必须与 RenderPassage 的搜索串完全一致，否则高亮永远不生效（#113）
                         if (filledWords[i - 1] != null)
-                            repl = " [" + filledWords[i - 1] + "] ";
+                            repl = " 【" + filledWords[i - 1] + "】 ";
                         else if (selBlank == i - 1)
-                            repl = " {_" + i + "_} ";
+                            repl = " 〔_" + i + "_〕 ";
                         else
                             repl = " ___" + i + "___ ";
                         int idx = t.IndexOf(marker);
@@ -2820,9 +3274,15 @@ form.PlaceBottomRight();
                         string search;
                         Color clr;
                         if (filledWords[i] != null)
-                        { search = "▶" + filledWords[i] + "◀"; clr = Color.FromArgb(0, 255, 136); }
+                        {
+                            search = "【" + filledWords[i] + "】";
+                            // 提交后按对错上色，让用户直接在短文里看到填错的空
+                            clr = submitted
+                                ? (filledWords[i] == correctWords[i] ? Color.FromArgb(0, 255, 136) : Color.FromArgb(255, 80, 110))
+                                : Color.FromArgb(0, 255, 136);
+                        }
                         else if (selBlank == i)
-                        { search = "┌_" + (i + 1) + "_┐"; clr = Color.FromArgb(255, 200, 100); }
+                        { search = "〔_" + (i + 1) + "_〕"; clr = Color.FromArgb(255, 200, 100); }
                         else
                         { search = "___" + (i + 1) + "___"; clr = Color.FromArgb(255, 180, 60); }
                         int pos = rtb.Text.IndexOf(search);
@@ -2846,7 +3306,8 @@ form.PlaceBottomRight();
                         if (!hasBlank) continue;
                         if (filledWords[b] != null)
                         {
-                            blankBtns[b].Text = (b + 1) + ". " + filledWords[b];
+                            // 只显示序号：填了词也不撑宽按钮，10 列网格才能永远不换行/不出滚动条（词本身在短文里以【】显示）
+                            blankBtns[b].Text = (b + 1).ToString();
                             blankBtns[b].BackColor = submitted
                                 ? (filledWords[b] == correctWords[b] ? Color.FromArgb(0, 90, 50) : Color.FromArgb(90, 20, 40))
                                 : Color.FromArgb(0, 70, 50);
@@ -2929,13 +3390,31 @@ form.PlaceBottomRight();
                 blankHintH = MeasureH("空位（点击选中，再在下方选项中选择）：", fontSmall, passageW) + 2;
                 optHintH = MeasureH("选项（A/B/C/D，点击即填入上方选中的空位）：", fontSmall, passageW) + 2;
                 int titleH = MeasureH("20空四选一 完形填空", fontTitle, passageW) + 6;
-                int blankBarH = 64;   // 20 个空位按钮（约 2 行）
-                int optBarH = 44;     // 4 个选项按钮（1 行）
+                int blankBarH = 62;   // 10 列 × 2 行固定网格（按钮只有序号，永不换行、不出滚动条）
                 int statusH = 26;
                 int submitBtnH = 40;
+
+                // 选项按钮 2 列 × 2 行（#113）：整行 1/4 宽时 "A. straightforward" 这类长单词放不下会被裁字，
+                // 改成半宽 + 按全部 80 个选项里最高的行高定高，长选项换行显示完整文本。
+                int optInnerW = Math.Max(60, passageW / 2 - 30);   // 扣边框/内边距再量，宁多给一行（同 #111）
+                int optLabelH = 0;
+                foreach (var kv in blank2opt)
+                    foreach (var o in kv.Value)
+                    {
+                        string t0 = "A. " + o;
+                        int h0 = MeasureH(t0, fontWord, optInnerW);
+                        int h1 = MeasureH(t0, fontWord, Math.Max(40, optInnerW - 12));
+                        if (h0 > optLabelH) optLabelH = h0;
+                        if (h1 > optLabelH) optLabelH = h1;
+                    }
+                int optBtnH = Math.Max(36, optLabelH + 14);
+                int optBarH = optBtnH * 2 + 8;   // 两行按钮 + 上下 margin
+
                 int passageH = (int)(wa.Height * 0.42);   // 短文区占 42% 屏高（300 词短文足够，超限出滚动条）
-                int formH = pad + titleH + passageH + 6 + blankHintH + 1 + blankBarH + 6 + optHintH + 1 + optBarH + 4 + statusH + 6 + submitBtnH + pad;
-                formH = Math.Min(formH, CapH());
+                int fixedH = pad + titleH + 6 + blankHintH + 1 + blankBarH + 6 + optHintH + 1 + optBarH + 4 + statusH + 6 + submitBtnH + pad;
+                int formH = Math.Min(fixedH + passageH, CapH());
+                // 面板变高后从短文区让高（保底 150px），保证底部提交按钮永远在窗内
+                if (fixedH + passageH > formH) passageH = Math.Max(150, passageH - (fixedH + passageH - formH));
 
                 int y = pad;
                 var form = new PopupForm(formW, formH, "ToastFish", back: Color.FromArgb(32, 32, 48), fore: Color.FromArgb(230, 230, 230));
@@ -2986,22 +3465,28 @@ form.PlaceBottomRight();
                 form.Controls.Add(blankLabel);
                 y += blankHintH + 1;
 
-                blankPanel = new FlowLayoutPanel
+                blankPanel = new TableLayoutPanel
                 {
                     Location = new Point(pad, y),
                     Size = new Size(passageW, blankBarH),
                     BackColor = Color.FromArgb(28, 28, 42),
-                    FlowDirection = FlowDirection.LeftToRight,
-                    WrapContents = true,
-                    AutoScroll = true
+                    ColumnCount = 10,
+                    RowCount = 2,
+                    Margin = new Padding(0),
+                    Padding = new Padding(0),
+                    AutoScroll = false
                 };
+                for (int c = 0; c < 10; c++)
+                    blankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 10f));
+                blankPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+                blankPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
                 for (int b = 0; b < 20; b++)
                 {
                     int bi = b;
                     var btn = new Button
                     {
                         Text = (b + 1).ToString(),
-                        Size = new Size(60, 26),
+                        Dock = DockStyle.Fill,
                         BackColor = Color.FromArgb(44, 44, 60),
                         ForeColor = Color.FromArgb(180, 180, 180),
                         FlatStyle = FlatStyle.Flat,
@@ -3020,7 +3505,7 @@ form.PlaceBottomRight();
                         RefreshOptions();
                         UpdateSubtitle();
                     };
-                    blankPanel.Controls.Add(btn);
+                    blankPanel.Controls.Add(btn, b % 10, b / 10);
                     blankBtns[b] = btn;
                 }
                 form.Controls.Add(blankPanel);
@@ -3040,26 +3525,35 @@ form.PlaceBottomRight();
                 form.Controls.Add(optLabel);
                 y += optHintH + 1;
 
-                optPanel = new FlowLayoutPanel
+                optPanel = new TableLayoutPanel
                 {
                     Location = new Point(pad, y),
                     Size = new Size(passageW, optBarH),
                     BackColor = Color.FromArgb(28, 28, 42),
-                    FlowDirection = FlowDirection.LeftToRight,
-                    WrapContents = false
+                    ColumnCount = 2,
+                    RowCount = 2,
+                    Margin = new Padding(0),
+                    Padding = new Padding(0)
                 };
+                optPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+                optPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+                optPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+                optPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
                 for (int i = 0; i < 4; i++)
                 {
                     int oi = i;
                     var btn = new Button
                     {
                         Text = "",
-                        Size = new Size((passageW - 20) / 4, 36),
+                        Dock = DockStyle.Fill,
                         BackColor = Color.FromArgb(44, 44, 64),
                         ForeColor = Color.FromArgb(200, 220, 255),
                         FlatStyle = FlatStyle.Flat,
                         Font = fontWord,
-                        Margin = new Padding(2),
+                        Margin = new Padding(3),
+                        // 半宽按钮里长选项会折行，左对齐 + 内边距比默认居中好读（#113）
+                        TextAlign = ContentAlignment.MiddleLeft,
+                        Padding = new Padding(8, 0, 8, 0),
                         Visible = false
                     };
                     btn.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 120);
@@ -3078,7 +3572,7 @@ form.PlaceBottomRight();
                         RefreshSubmitBtn();
                         UpdateSubtitle();
                     };
-                    optPanel.Controls.Add(btn);
+                    optPanel.Controls.Add(btn, i % 2, i / 2);
                     optBtns[i] = btn;
                 }
                 form.Controls.Add(optPanel);
@@ -3200,6 +3694,273 @@ form.PlaceBottomRight();
         protected override bool ShowWithoutActivation
         {
             get { return true; }
+        }
+    }
+
+    /// <summary>
+    /// 支持「划重点」的 RichTextBox（2026-10-29）。
+    ///
+    /// 只读正文上叠一层自绘下划线：
+    ///   · 每次划线记录「字符区间 + 层号」，同一区间可反复叠多层，区间可部分重叠（错开显示）；
+    ///   · 层号 = 与已有划线重叠者的最大层号 + 1；绘制时每层向下错开 3px 并换色；
+    ///   · 右键擦掉覆盖该处的最上面一条。
+    ///
+    /// 为什么自绘：改动正文的 SelectionFont/SelectionColor 会把目标词的橙色加粗一起冲掉，
+    /// 且 RichTextBox 没有「字体下划线 + 多层」能力。这里只在 WM_PAINT 之后用
+    /// Graphics.FromHwnd 画线，正文格式一个字节都不动；位置来自 GetPositionFromCharIndex，
+    /// 所以滚动、改尺寸、Alt 放大（ZoomFactor）都自动跟随。
+    /// </summary>
+    internal class MarkupRichTextBox : RichTextBox
+    {
+        internal class Mark
+        {
+            public int Start;
+            public int End;      // 不含
+            public int Layer;
+            public Color Color;  // 创建时定色，删掉下层不会串色
+        }
+
+        private const int WM_PAINT = 0x000F;
+        private const int WM_SIZE = 0x0005;
+        private const int WM_HSCROLL = 0x0114;
+        private const int WM_VSCROLL = 0x0115;
+        private const int WM_MOUSEWHEEL = 0x020A;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool HideCaret(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool ShowCaret(IntPtr hWnd);
+
+        private static readonly Color[] Palette = new Color[]
+        {
+            Color.FromArgb(255, 206, 84),    // 琥珀
+            Color.FromArgb(110, 205, 255),   // 天蓝
+            Color.FromArgb(126, 240, 170),   // 薄荷
+            Color.FromArgb(255, 148, 180),   // 珊瑚
+            Color.FromArgb(196, 165, 255)    // 紫
+        };
+
+        private readonly List<Mark> _marks = new List<Mark>();
+        private bool _dragging;
+        private int _anchor = -1;
+        private int _lineAdvance;        // RichEdit 实际行高（10.5pt 下约 26px，远大于 Font.Height=18）
+        private float _lineAdvanceZoom; // 上面这个值是在哪个 ZoomFactor 下量的（Alt 放大后要重量）
+
+        private bool _markupEnabled;
+
+        /// <summary>划重点模式：拖动选中即划线，右键擦掉该处最上面一条。</summary>
+        public bool MarkupEnabled
+        {
+            get { return _markupEnabled; }
+            set
+            {
+                _markupEnabled = value;
+                if (!value)
+                {
+                    SelectionLength = 0;
+                    try { ShowCaret(Handle); } catch { }   // 退出划重点后恢复正常光标
+                }
+            }
+        }
+
+        public int MarkCount { get { return _marks.Count; } }
+
+        public event EventHandler MarksChanged;
+
+        /// <summary>加一条划线（start/length 为字符下标）；返回是否成功。</summary>
+        public bool AddMark(int start, int length)
+        {
+            int total = TextLength;
+            if (length <= 0 || total <= 0) return false;
+            int s = Math.Max(0, Math.Min(start, total));
+            int e = Math.Max(s, Math.Min(start + length, total));
+            if (e - s <= 0) return false;
+
+            int layer = 0;
+            foreach (var m in _marks)
+                if (m.Start < e && s < m.End) layer = Math.Max(layer, m.Layer + 1);
+
+            _marks.Add(new Mark
+            {
+                Start = s, End = e, Layer = layer,
+                Color = Palette[layer % Palette.Length]
+            });
+            Invalidate();
+            RaiseChanged();
+            return true;
+        }
+
+        /// <summary>擦掉覆盖该字符位置的最上面一条划线；返回是否擦到。</summary>
+        public bool RemoveTopMarkAt(int charIndex)
+        {
+            Mark hit = null;
+            foreach (var m in _marks)
+            {
+                if (charIndex < m.Start || charIndex >= m.End) continue;
+                if (hit == null || m.Layer >= hit.Layer) hit = m;
+            }
+            if (hit == null) return false;
+            _marks.Remove(hit);
+            Invalidate();
+            RaiseChanged();
+            return true;
+        }
+
+        public void ClearMarks()
+        {
+            if (_marks.Count == 0) return;
+            _marks.Clear();
+            Invalidate();
+            RaiseChanged();
+        }
+
+        private void RaiseChanged()
+        {
+            if (MarksChanged != null) MarksChanged(this, EventArgs.Empty);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (MarkupEnabled)
+            {
+                if (e.Button == MouseButtons.Right)
+                {
+                    if (RemoveTopMarkAt(GetCharIndexFromPosition(e.Location))) return;   // 吃掉右键，不弹菜单
+                }
+                else if (e.Button == MouseButtons.Left)
+                {
+                    // 自己维护选区：弹窗不抢焦点，交给 RichEdit 默认拖选可能不显示高亮
+                    _anchor = GetCharIndexFromPosition(e.Location);
+                    _dragging = true;
+                    SelectionStart = _anchor;
+                    SelectionLength = 0;
+                    HideSelection = false;
+                    Cursor = Cursors.IBeam;
+                    return;
+                }
+            }
+            base.OnMouseDown(e);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            if (_dragging)
+            {
+                int idx = GetCharIndexFromPosition(e.Location);
+                int s = Math.Min(_anchor, idx);
+                int en = Math.Min(TextLength, Math.Max(_anchor, idx));
+                SelectionStart = Math.Max(0, s);
+                SelectionLength = Math.Max(0, en - Math.Max(0, s));
+                Cursor = Cursors.IBeam;
+                return;
+            }
+            base.OnMouseMove(e);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            if (_dragging)
+            {
+                _dragging = false;
+                int len = SelectionLength;
+                int start = SelectionStart;
+                SelectionLength = 0;   // 清掉蓝色选区，划线立刻可见
+                if (len > 0) AddMark(start, len);
+                try { HideCaret(Handle); } catch { }   // 正文被点过就会有闪烁光标，划线后收掉
+                return;
+            }
+            base.OnMouseUp(e);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (_marks.Count == 0) return;
+            if (m.Msg == WM_PAINT) DrawMarks();
+            else if (m.Msg == WM_VSCROLL || m.Msg == WM_HSCROLL || m.Msg == WM_MOUSEWHEEL || m.Msg == WM_SIZE)
+                Invalidate();   // 滚动/改尺寸后按新位置重画
+        }
+
+        private void DrawMarks()
+        {
+            int total = TextLength;
+            if (total <= 0) return;
+            try
+            {
+                using (var g = Graphics.FromHwnd(Handle))
+                {
+                    float zoom = ZoomFactor <= 0 ? 1f : ZoomFactor;
+                    int advance = LineAdvance(zoom);   // 行高：RichEdit 的行距，不是 Font.Height
+                    int step = Math.Max(2, (int)Math.Round(3f * zoom));
+                    const int maxLayer = 4;   // 超过 4 层不再继续下移，避免压到下一行
+
+                    foreach (var mk in _marks)
+                    {
+                        int s = Math.Max(0, mk.Start);
+                        int e = Math.Min(total, mk.End);
+                        if (e <= s) continue;
+                        int off = Math.Min(mk.Layer, maxLayer) * step;
+                        int segStart = s;
+                        int segY = GetPositionFromCharIndex(s).Y;
+                        for (int i = s + 1; i <= e; i++)
+                        {
+                            bool last = (i == e);
+                            int y = last ? segY : GetPositionFromCharIndex(i).Y;
+                            if (last || y != segY)
+                            {
+                                // 划线落在基线下约 2px：行顶 + 行高 - 5
+                                DrawSegment(g, mk.Color, segStart, i - 1, segY + advance - 5 + off, zoom);
+                                segStart = i;
+                                segY = y;
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // 自绘失败不能影响弹窗本身
+            }
+        }
+
+        /// <summary>RichEdit 的真实行高：用首两行的 Y 差测出来并缓存（行距与 Font.Height 差别很大）。</summary>
+        private int LineAdvance(float zoom)
+        {
+            if (_lineAdvance > 0 && Math.Abs(_lineAdvanceZoom - zoom) < 0.01f) return _lineAdvance;
+            int y0 = 0;
+            bool got = false;
+            int n = Math.Min(TextLength, 600);
+            for (int i = 0; i < n; i++)
+            {
+                int yy = GetPositionFromCharIndex(i).Y;
+                if (!got) { y0 = yy; got = true; }
+                else if (yy != y0) { _lineAdvance = Math.Max(8, yy - y0); break; }
+            }
+            if (_lineAdvance <= 0) _lineAdvance = Math.Max(8, (int)Math.Round((Font.Height + 8) * zoom));   // 单行文本退路
+            _lineAdvanceZoom = zoom;
+            return _lineAdvance;
+        }
+
+        private void DrawSegment(Graphics g, Color color, int first, int last, int y, float zoom)
+        {
+            if (last < first) return;
+            string text = Text;
+            // 行尾空白不画（否则换行处的下划线会拖出一截）
+            while (last > first && last < text.Length && char.IsWhiteSpace(text[last])) last--;
+            Point p1 = GetPositionFromCharIndex(first);
+            Point p2 = GetPositionFromCharIndex(last);
+            int x1 = p1.X;
+            int x2;
+            int probe = last + 1;
+            if (probe <= TextLength)
+            {
+                Point pn = GetPositionFromCharIndex(probe);
+                x2 = (pn.Y == p2.Y && pn.X > p2.X) ? pn.X : p2.X + (int)Math.Round(7f * zoom);
+            }
+            else x2 = p2.X + (int)Math.Round(7f * zoom);
+            if (x2 <= x1) x2 = x1 + 4;
+            using (var pen = new Pen(color, Math.Max(1f, 1.6f * zoom)))
+                g.DrawLine(pen, x1, y, x2, y);
         }
     }
 
