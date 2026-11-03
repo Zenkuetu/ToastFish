@@ -70,8 +70,22 @@ namespace ToastFish.Model.PushControl
         /// <summary>测试模式：本轮学习结束后自动恢复数据库，不保存学习记录。</summary>
         public static volatile bool TestMode = false;
 
-        /// <summary>「学习中」词本轮内重复弹出的次数上限，防止答 Again/Hard 一直不毕业导致死循环。</summary>
-        private const int MAX_ROUND_REPEATS = 6;
+        /// <summary>一个词在一轮学习里最多弹出几次（含第一次）。用户要求：始终答「不记得/模糊」也不该反复重来。</summary>
+        private const int MAX_ROUND_SHOWS = 3;
+
+        /// <summary>
+        /// 记一次「本轮第 N 次弹出」；已达 MAX_ROUND_SHOWS 返回 false（调用方跳过，留到下一轮）。
+        /// 抽成方法是因为新词/复习词/学习中词三条 pushCard 路径都要计数 —— 分散写容易漏一条，
+        /// 漏掉任意一条就等于没有上限（2026-11-03 用户反馈：一直答「不记得/模糊」会弹出特别多次）。
+        /// </summary>
+        internal static bool TryEnterRoundShow(Dictionary<int, int> shown, int wordRank)
+        {
+            int n;
+            shown.TryGetValue(wordRank, out n);
+            if (n >= MAX_ROUND_SHOWS) return false;
+            shown[wordRank] = n + 1;
+            return true;
+        }
 
         // === AI 短文累积门控（2026-09-16 新增，见 CLAUDE.md #67）===
         /// <summary>累计多少新词才生成一次 AI 短文/完形填空（此前每轮都生成，频率过高）。</summary>
@@ -841,6 +855,10 @@ namespace ToastFish.Model.PushControl
                 .ToList();
             List<Card> FinishedCardLst = new List<Card>();
 
+            // 本轮每个词已经弹出的次数（key=wordRank）：一个词一轮最多 MAX_ROUND_SHOWS 次
+            var roundShows = new Dictionary<int, int>();
+            // 因达本轮上限而跳过的词 —— 必须落库，否则本轮 updateCard 的结果（status/间隔）全丢
+            List<Card> LeftoverCardLst = new List<Card>();
             double Score;
             // New Card First
             Debug.WriteLine($"开始背单词 @{DateTime.Now}");
@@ -848,6 +866,7 @@ namespace ToastFish.Model.PushControl
             {
                 Card newCardi = NewCardLst[0];
                 // Cardstatus cardstatus, int numNewCards, int numLearingCards, int numReviewedCards)
+                TryEnterRoundShow(roundShows, newCardi.word.wordRank);
                 Score = pushWords.pushCard(newCardi, newCardi.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
                 if (Score == -1)
                 {
@@ -873,24 +892,29 @@ namespace ToastFish.Model.PushControl
                 for (int j = 0; j < LearningCardLst.Count; j++)
                 {
                     Card Cardj = LearningCardLst[j];
-                    if (Cardj.isDue())
-                    {
-                        Score = pushWords.pushCard(Cardj, Cardj.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
-                        if (Score == -1)
-                        {
-                            MessageBox.Show("卡题出错！");
-                            return;
-                        }
-                        Cardj.updateCard(Score);
-                        if (Cardj.status == Cardstatus.Reviewed)
-                        {
-                            LearningCardLst.RemoveAt(j);
-                            FinishedCardLst.Add(Cardj);
-                        }
-                    }
-                    else
+                    if (!Cardj.isDue())
                     {
                         break;
+                    }
+                    // 已达本轮出现上限 → 留到下一轮（LeftoverCardLst 负责落库）
+                    if (!TryEnterRoundShow(roundShows, Cardj.word.wordRank))
+                    {
+                        LearningCardLst.RemoveAt(j);
+                        LeftoverCardLst.Add(Cardj);
+                        j--;
+                        continue;
+                    }
+                    Score = pushWords.pushCard(Cardj, Cardj.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
+                    if (Score == -1)
+                    {
+                        MessageBox.Show("卡题出错！");
+                        return;
+                    }
+                    Cardj.updateCard(Score);
+                    if (Cardj.status == Cardstatus.Reviewed)
+                    {
+                        LearningCardLst.RemoveAt(j);
+                        FinishedCardLst.Add(Cardj);
                     }
                 }
             }
@@ -1037,6 +1061,7 @@ namespace ToastFish.Model.PushControl
             {
                 Card newCardi = ReviewedCardLst[0];
                 // Cardstatus cardstatus, int numNewCards, int numLearingCards, int numReviewedCards)
+                TryEnterRoundShow(roundShows, newCardi.word.wordRank);
                 Score = pushWords.pushCard(newCardi, newCardi.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
                 if (Score == -1)
                 {
@@ -1062,24 +1087,29 @@ namespace ToastFish.Model.PushControl
                 for (int j = 0; j < LearningCardLst.Count; j++)
                 {
                     Card Cardj = LearningCardLst[j];
-                    if (Cardj.isDue())
-                    {
-                        Score = pushWords.pushCard(Cardj, Cardj.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
-                        if (Score == -1)
-                        {
-                            MessageBox.Show("卡题出错！");
-                            return;
-                        }
-                        Cardj.updateCard(Score);
-                        if (Cardj.status == Cardstatus.Reviewed)
-                        {
-                            LearningCardLst.RemoveAt(j);
-                            FinishedCardLst.Add(Cardj);
-                        }
-                    }
-                    else
+                    if (!Cardj.isDue())
                     {
                         break;
+                    }
+                    // 已达本轮出现上限 → 留到下一轮（LeftoverCardLst 负责落库）
+                    if (!TryEnterRoundShow(roundShows, Cardj.word.wordRank))
+                    {
+                        LearningCardLst.RemoveAt(j);
+                        LeftoverCardLst.Add(Cardj);
+                        j--;
+                        continue;
+                    }
+                    Score = pushWords.pushCard(Cardj, Cardj.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
+                    if (Score == -1)
+                    {
+                        MessageBox.Show("卡题出错！");
+                        return;
+                    }
+                    Cardj.updateCard(Score);
+                    if (Cardj.status == Cardstatus.Reviewed)
+                    {
+                        LearningCardLst.RemoveAt(j);
+                        FinishedCardLst.Add(Cardj);
                     }
                 }
             }
@@ -1091,17 +1121,15 @@ namespace ToastFish.Model.PushControl
                 int result = a.dateLearingDue.CompareTo(b.dateLearingDue);
                 return result;
             });
-            // 本轮内「学习中」词的重复弹出次数（key=wordRank），用于防死循环上限
-            var roundRepeats = new Dictionary<int, int>();
             while (LearningCardLst.Count != 0)
             {
                 Card Cardj = LearningCardLst[0];
-                // 恢复「答错立即重复弹出」机制：答 Again/Hard 的词在本轮反复弹出，直到答记住/牢记毕业。
-                // 每词本轮最多重复 MAX_ROUND_REPEATS 次，超过则留到下次学习，防止一直答 Again 卡死。
-                roundRepeats.TryGetValue(Cardj.word.wordRank, out int reps);
-                if (reps >= MAX_ROUND_REPEATS)
+                // 保留「答错后本轮内立即重复弹出」（SM2 learning steps 依赖它），但一个词本轮一共最多
+                // 出现 MAX_ROUND_SHOWS 次（新词/复习词/学习中词三条路径都计入），超出就留到下一轮。
+                if (!TryEnterRoundShow(roundShows, Cardj.word.wordRank))
                 {
                     LearningCardLst.RemoveAt(0);
+                    LeftoverCardLst.Add(Cardj);
                     continue;
                 }
                 Score = pushWords.pushCard(Cardj, Cardj.status, NewCardLst.Count, LearningCardLst.Count, ReviewedCardLst.Count);
@@ -1118,7 +1146,6 @@ namespace ToastFish.Model.PushControl
                 }
                 else
                 {
-                    roundRepeats[Cardj.word.wordRank] = reps + 1;
                     LearningCardLst.Sort((a, b) =>
                     {
                         // compare a to b to get ascending order
@@ -1132,6 +1159,7 @@ namespace ToastFish.Model.PushControl
             Debug.WriteLine($"更新数据库 @{DateTime.Now}");
             Query.updateCardDateBase(FinishedCardLst);
             Query.updateCardDateBase(LearningCardLst);  // 同时写入 Step1/Step2 词（status=1/2），避免进度丢失
+            if (LeftoverCardLst.Count > 0) Query.updateCardDateBase(LeftoverCardLst);  // 达本轮上限的词：本轮状态照样落库，进度不丢
             Query.SyncCountTable();  // 同步 Count 表，确保进度计数实时准确
             Debug.WriteLine($"数据库更新完毕 @{DateTime.Now}");
 

@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 
 namespace ToastFish.Model.Ai
@@ -286,6 +287,8 @@ namespace ToastFish.Model.Ai
         public List<LongSentence> LongSentences = new List<LongSentence>();
         /// <summary>英译汉练习句（仅考研词库生成，最多 2 条）</summary>
         public List<TransItem> Translations = new List<TransItem>();
+        /// <summary>命题质量问题（2026-11-03）：题干引用短文里不存在的词、段号越界等，修正轮的输入提示</summary>
+        public List<string> QualityIssues = new List<string>();
     }
 
     /// <summary>15选10 完形填空候选词</summary>
@@ -373,7 +376,8 @@ namespace ToastFish.Model.Ai
             "4) 词义/句意猜测题的被猜词是否出现在短文中但【不在用户单词列表内】（禁止猜用户学过的词）；" +
             "5) 短文是否自然连贯、确实用上了全部给定单词；" +
             "6) 每题4个选项的长度是否严格均衡（单词数相同或仅相差1个；正确选项不得长于任何干扰项，否则视为长度泄露答案）；" +
-            "7) long（长难句拆解）与 trans（英译汉练习）是否齐全：long 恰好2项、trans 恰好2项；long 每项的 s 必须是短文中的原句、parts 各片段依次拼接必须恰好等于 s、main 必须是不含修饰成分的主干；trans 每项的 s 也必须是短文中的原句、ref 是通顺中文、points 有 3~4 条。" +
+            "7) long（长难句拆解）与 trans（英译汉练习）是否齐全：long 恰好2项、trans 恰好2项；long 每项的 s 必须是短文中的原句、parts 各片段依次拼接必须恰好等于 s、main 必须是不含修饰成分的主干；trans 每项的 s 也必须是短文中的原句、ref 是通顺中文、points 有 3~4 条；" +
+            "8) 短文是否分成了 4 段（段与段之间有空行）；题干里出现的 paragraph N 是否真实存在（N 不得大于实际段数）；题干以 the word / the phrase / the sentence 提问时，被问的词或短语是否**逐字**出现在短文中——若不在，必须换词改题或重写该题，绝不能保留一个原文里没有的词（这是最严重的问题）。" +
             "若无问题，输出 {\"ok\":true}。" +
             "若存在问题，输出修正后的完整 JSON（格式与输入一致：{\"en\":\"英文短文\",\"cn\":\"中文翻译\",\"questions\":[{\"q\":\"题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}],\"long\":[{\"s\":\"原句\",\"main\":\"主干\",\"parts\":[{\"t\":\"片段\",\"type\":\"成分类型\",\"fn\":\"作用\"}],\"tr\":\"整句中译\"}],\"trans\":[{\"s\":\"原句\",\"ref\":\"参考译文\",\"points\":[\"采分点\"]}]}）。" +
             "只输出 JSON。";
@@ -397,6 +401,7 @@ namespace ToastFish.Model.Ai
         private const string SYS_PROMPT_KAOYAN =
             "用户给出英语单词列表。完成四件事：" +
             "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文（150~220词），" +
+            "短文必须分成 4 个自然段（每段 2~5 句），段与段之间用一个空行分隔（两个换行符），不得把全文写成一大段；" +
             "文体贴近考研英语（一）阅读理解 Part A：学术性议论文或说明文，题材选自人文社科、科技、经济、法律、心理等领域，" +
             "有明确的论点—论据—论证结构（可含让步、转折、因果、举例、对比），适当使用长难句（从句嵌套、非谓语、插入语、倒装），但表达必须自然地道，禁止为长而长的别扭句子。" +
             "2)根据短文出5道考研英语水准的英文阅读理解单选题，命题要求：" +
@@ -407,6 +412,8 @@ namespace ToastFish.Model.Ai
             "b.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
             "c.干扰项须模仿考研英语真题的干扰方式并具有迷惑性，可综合使用：偷换概念（把部分换成整体、把可能换成必然、替换主语/宾语/程度或范围限定词）、以偏概全（把局部细节或例子当全文主旨）、无中生有（原文未提及或推不出的信息）、过度推断（在原文基础上主观延伸结论）、正反混淆（与原文观点相反）、过于绝对（only/never/all/everything 等绝对化表述）、杂糅拼凑（词都来自原文但组合成原文没有的新信息）；" +
             "d.每题4个选项（每个6~12个单词），只有1个正确，正确选项位置随机；4个选项长度必须严格均衡——单词数相同或仅相差1个，正确选项不得长于任何干扰项；为避免正确项天然偏长，正确选项要写得精炼，干扰项也必须写成结构完整的句子而非短语片段；任何选项明显偏长都会直接泄露答案，属于严重命题错误。" +
+            "e.题干若提到段落，只能写「in paragraph N」，且 N 必须在 1~4 之间、与短文真实段数一致（短文只有 4 段，禁止出现 paragraph five 这类越界引用）；引用原文词句时必须与短文逐字一致（大小写、时态、拼写都不得改动）；" +
+            "f.凡题干以 the word / the phrase / the sentence 提问，被问的那个词或短语必须原样出现在短文中、且能由该处上下文推出答案；一旦发现自己引用的词不在短文里，必须换一个真实存在的词重新命题，绝不能凭空捏造一个词。" +
             "3)从短文中挑2个最值得拆解的长难句（含从句嵌套/非谓语/插入语/倒装中的至少一种），逐句拆出结构：" +
             "main=去掉所有修饰成分后剩下的核心主干（英文，只保留主谓宾，尽量短）；" +
             "parts=按原句顺序把整句切成若干片段，每个片段{\"t\":原文片段,\"type\":成分类型,\"fn\":这个成分在句中的作用（中文短语，如\"修饰 the practice\"）}，各片段 t 依次拼接必须与原句完全一致（不得漏词、不得改词，只允许把相邻空格并进片段）；" +
@@ -419,6 +426,7 @@ namespace ToastFish.Model.Ai
         private const string SYS_PROMPT_REASON_KAOYAN =
             "用户给出英语单词列表。完成四件事：" +
             "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文，不设字数限制，篇幅按内容需要充分展开、不必刻意精简，" +
+            "短文必须分成 4 个自然段，段与段之间用一个空行分隔（两个换行符），不得把全文写成一大段；" +
             "文体贴近考研英语（一）阅读理解 Part A：学术性议论文或说明文，题材选自人文社科、科技、经济、法律、心理等领域，" +
             "有明确的论点—论据—论证结构，内容有深度、值得一读，适当使用长难句（从句嵌套、非谓语、插入语）但表达自然地道。" +
             "2)根据短文出5道考研英语水准的英文阅读理解单选题，命题要求：" +
@@ -429,6 +437,8 @@ namespace ToastFish.Model.Ai
             "b.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
             "c.干扰项须模仿考研英语真题的干扰方式并具有迷惑性，可综合使用：偷换概念（把部分换成整体、把可能换成必然、替换主语/宾语/程度或范围限定词）、以偏概全（把局部细节或例子当全文主旨）、无中生有（原文未提及或推不出的信息）、过度推断（在原文基础上主观延伸结论）、正反混淆（与原文观点相反）、过于绝对（only/never/all/everything 等绝对化表述）、杂糅拼凑（词都来自原文但组合成原文没有的新信息）；" +
             "d.每题4个选项（每个6~12个单词），只有1个正确，正确选项位置随机；4个选项长度必须严格均衡——单词数相同或仅相差1个，正确选项不得长于任何干扰项；为避免正确项天然偏长，正确选项要写得精炼，干扰项也必须写成结构完整的句子而非短语片段；任何选项明显偏长都会直接泄露答案，属于严重命题错误。" +
+            "e.题干若提到段落，只能写「in paragraph N」，且 N 必须在 1~4 之间、与短文真实段数一致（短文只有 4 段，禁止出现 paragraph five 这类越界引用）；引用原文词句时必须与短文逐字一致（大小写、时态、拼写都不得改动）；" +
+            "f.凡题干以 the word / the phrase / the sentence 提问，被问的那个词或短语必须原样出现在短文中、且能由该处上下文推出答案；一旦发现自己引用的词不在短文里，必须换一个真实存在的词重新命题，绝不能凭空捏造一个词。" +
             "3)从短文中挑2个最值得拆解的长难句（含从句嵌套/非谓语/插入语/倒装中的至少一种），逐句拆出结构：" +
             "main=去掉所有修饰成分后剩下的核心主干（英文，只保留主谓宾，尽量短）；" +
             "parts=按原句顺序把整句切成若干片段，每个片段{\"t\":原文片段,\"type\":成分类型,\"fn\":这个成分在句中的作用（中文短语，如\"修饰 the practice\"）}，各片段 t 依次拼接必须与原句完全一致（不得漏词、不得改词，只允许把相邻空格并进片段）；" +
@@ -711,8 +721,14 @@ namespace ToastFish.Model.Ai
                     return false;
                 }
 
-                // 修正轮：仅快速模式（推理模式 pro 本身深度思考，保持单轮控延迟/成本）
-                if (!reason)
+                // 考研短文要求 4 段：模型偷懒写成一大段时，「in paragraph four」这类段引用必然错位，
+                // 带一条提示进修正轮，让短文真的分段（2026-11-03，用户截图：整篇一段却问 paragraph four）
+                if (kaoyan && CountParagraphs(result.EssayEN) < 4)
+                    result.QualityIssues.Add("短文只有 " + CountParagraphs(result.EssayEN)
+                        + " 段，考研短文必须分成 4 个自然段（段与段之间用空行分隔），请重写短文并保留原有词汇与题目数量");
+
+                // 修正轮：快速模式必跑；推理模式本身单轮，只有检出问题（引用词不存在 / 段落数不足）时才补一次修正
+                if (!reason || result.QualityIssues.Count > 0)
                     ReviseEssay(words, bookName, ref result);
 
                 // 记住本轮"system + 单词表 + 生成结果"，评分时接着这段对话继续问，
@@ -1047,6 +1063,9 @@ namespace ToastFish.Model.Ai
             for (int round = 0; round < MAX_REVISE_ROUNDS; round++)
             {
                 string user = string.Join(", ", words.ToArray()) + "\n\n当前短文与题目(JSON):\n" + SerializeEssay(result);
+                // 解析阶段发现的硬伤（段号越界已被本地改写，这里只剩「引用了短文中不存在的词」这类必须重出的题）
+                if (result.QualityIssues != null && result.QualityIssues.Count > 0)
+                    user += "\n\n已知问题（必须修正；修正后 questions 仍要有 5 道题）：\n- " + string.Join("\n- ", result.QualityIssues.ToArray());
                 bool kaoyan = !string.IsNullOrEmpty(bookName) && bookName.StartsWith("KaoYan");
                 string revisePrompt = kaoyan ? REVISE_PROMPT_KAOYAN : REVISE_PROMPT.Replace("{LEVEL}", GetBookLevel(bookName));
                 string body = BuildBody(revisePrompt, user, false, kaoyan ? 3200 : 1400);
@@ -1697,6 +1716,11 @@ namespace ToastFish.Model.Ai
                 }
             }
 
+            // 题干质量兜底（2026-11-03）：AI 偶尔在只有一段的短文里问「in paragraph four」，
+            // 或引用一个根本没出现在短文里的词（用户截图：The word sovereign in paragraph four...
+            // 而全文没有 sovereign）——这类题无法作答，必须在解析阶段改掉或丢掉。
+            SanitizeQuestionStems(r);
+
             // 长难句拆解（long）/ 英译汉练习（trans）：仅考研库生成，非考研库这两项为空。
             // 校验：原句必须是短文里真实出现过的句子；长难句至少拆成 2 段且有主干；英译汉必须有参考译文。
             object lsObj;
@@ -1760,6 +1784,156 @@ namespace ToastFish.Model.Ai
 
             result = r;
             return true;
+        }
+
+        /// <summary>
+        /// 题干质量兜底（2026-11-03）。两类在真实用户截图里出现过的错误：
+        /// 1) 短文只有一段，题目却问「in paragraph four」——段号越界，改成 in the passage；
+        /// 2) 题目以 the word X 提问，X 根本不在短文里（如 sovereign）——无解，整题丢弃并记入 QualityIssues，
+        ///    修正轮会带着这条提示重出该题。
+        /// </summary>
+        private static void SanitizeQuestionStems(EssayResult r)
+        {
+            string[] paras = SplitParagraphs(r.EssayEN);
+            var kept = new List<EssayQuestion>();
+            for (int i = 0; i < r.Questions.Count; i++)
+            {
+                EssayQuestion q = r.Questions[i];
+                string asked = FirstAskedWord(q.Question);       // 词义题问的那个词（没有就是 null）
+                string stem = FixParagraphRefs(q.Question, paras, asked);
+                string missing;
+                if (FindMissingTerm(r.EssayEN, stem, out missing))
+                {
+                    r.QualityIssues.Add("第 " + (i + 1) + " 题引用的「" + missing + "」在短文中不存在（无法作答）");
+                    continue;
+                }
+                q.Question = stem;
+                kept.Add(q);
+            }
+            if (kept.Count != r.Questions.Count)
+            {
+                r.Questions.Clear();
+                r.Questions.AddRange(kept);
+            }
+        }
+
+        private static readonly Regex _paraSplitRe = new Regex(@"\n\s*\n", RegexOptions.Compiled);
+
+        /// <summary>按空行切段（丢弃纯空白段；至少返回 1 段）。</summary>
+        private static string[] SplitParagraphs(string essay)
+        {
+            if (string.IsNullOrEmpty(essay)) return new[] { "" };
+            string text = essay.Replace("\r\n", "\n");
+            string[] parts = _paraSplitRe.Split(text);
+            var list = new List<string>();
+            foreach (string p in parts) if (p != null && p.Trim().Length > 0) list.Add(p);
+            // 模型偶尔只用单个换行分段（没有空行）：按单换行兜底，否则整篇会被当成第 1 段，
+            // 明明有 4 段也会被判成「paragraph four 越界」
+            if (list.Count == 1 && text.IndexOf('\n') >= 0)
+            {
+                list.Clear();
+                foreach (string p in text.Split('\n')) if (p != null && p.Trim().Length > 0) list.Add(p);
+            }
+            if (list.Count == 0) list.Add(essay);
+            return list.ToArray();
+        }
+
+        /// <summary>短文实际段数（空行分段；返回至少 1）。</summary>
+        private static int CountParagraphs(string essay) { return SplitParagraphs(essay).Length; }
+
+        /// <summary>题干里第一个被问的词（the word X / the term X）；没有返回 null。</summary>
+        private static string FirstAskedWord(string stem)
+        {
+            if (string.IsNullOrEmpty(stem)) return null;
+            Match m = _wordAskRe.Match(stem);
+            if (!m.Success) return null;
+            string w = m.Groups[1].Value.Trim().TrimEnd('.', ',', ';', ':', '?');
+            return w.Length >= 2 ? w : null;
+        }
+
+        // 「in paragraph four」「from paragraph 3」「paragraph 2」这类段引用
+        private static readonly Regex _paraRefRe = new Regex(
+            @"\b(?:(in|from|of|to)\s+)?paragraph\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2})\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// 段引用兜底：段号越界、或「the word X in paragraph N」里第 N 段根本没有 X，都改成 the passage，
+        /// 避免把读者指到错误位置（用户截图：全文一段却问 in paragraph four）。
+        /// </summary>
+        private static string FixParagraphRefs(string stem, string[] paras, string asked)
+        {
+            if (string.IsNullOrEmpty(stem)) return stem;
+            int paraCount = paras.Length;
+            return _paraRefRe.Replace(stem, m =>
+            {
+                int n = ParaWordToNumber(m.Groups[2].Value);
+                bool ok = n >= 1 && n <= paraCount;
+                if (ok && !string.IsNullOrEmpty(asked))
+                    ok = Regex.IsMatch(paras[n - 1], @"\b" + Regex.Escape(asked) + @"\b", RegexOptions.IgnoreCase);
+                if (ok) return m.Value;
+                return m.Groups[1].Success ? "in the passage" : "the passage";
+            });
+        }
+
+        private static int ParaWordToNumber(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return -1;
+            switch (s.Trim().ToLowerInvariant())
+            {
+                case "one": return 1;
+                case "two": return 2;
+                case "three": return 3;
+                case "four": return 4;
+                case "five": return 5;
+                case "six": return 6;
+                case "seven": return 7;
+                case "eight": return 8;
+                case "nine": return 9;
+                case "ten": return 10;
+            }
+            int n;
+            return int.TryParse(s.Trim(), out n) ? n : -1;
+        }
+
+        // the word sovereign / the term 「sovereign」
+        private static readonly Regex _wordAskRe = new Regex(
+            "the\\s+(?:word|term)\\s+[\u201c\u2018\u300c\"']?([A-Za-z][A-Za-z'\\-]{1,30})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // the phrase “...” / the sentence “...”
+        private static readonly Regex _phraseAskRe = new Regex(
+            "the\\s+(?:phrase|expression|sentence)\\s+[\u201c\u2018\u300c\"']([^\u201d\u2019\u300d\"']{3,120})[\u201d\u2019\u300d\"']",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>题干里被问的词/短语是否真的出现在短文中；找不到就返回它（调用方丢题）。</summary>
+        private static bool FindMissingTerm(string essay, string stem, out string missing)
+        {
+            missing = null;
+            if (string.IsNullOrEmpty(essay) || string.IsNullOrEmpty(stem)) return false;
+            foreach (Match m in _wordAskRe.Matches(stem))
+            {
+                string w = m.Groups[1].Value.Trim().TrimEnd('.', ',', ';', ':', '?');
+                if (w.Length < 2) continue;
+                if (!Regex.IsMatch(essay, @"\b" + Regex.Escape(w) + @"\b", RegexOptions.IgnoreCase))
+                {
+                    missing = w;
+                    return true;
+                }
+            }
+            foreach (Match m in _phraseAskRe.Matches(stem))
+            {
+                string p = m.Groups[1].Value.Trim();
+                if (p.Length < 8) continue;
+                if (WordCountOf(p) > 5) continue;   // 长句引用容错：不逐一核对（改写过的长句仍算合法题）
+                if (!ContainsLoose(essay, p)) { missing = p; return true; }
+            }
+            return false;
+        }
+
+        private static int WordCountOf(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return 0;
+            return s.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).Length;
         }
 
         /// <summary>宽松包含判断：忽略大小写与连续空白差异，用于校验 AI 引用的原句确实出自短文。</summary>
