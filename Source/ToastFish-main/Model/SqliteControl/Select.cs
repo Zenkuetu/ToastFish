@@ -251,6 +251,29 @@ namespace ToastFish.Model.SqliteControl
             if (TABLE_NAME.IndexOf("自定义") != -1)
                 TABLE_NAME = "GRE_2";
 
+            EnsureWordColumns();
+            Word Temp = new Word();
+            AllWordList = DataBase.Query<Word>("select * from " + TABLE_NAME, Temp);
+
+            foreach (var Word in AllWordList)
+            {
+                Card cardi = new Card(Word);
+                if (cardi.status == Cardstatus.New)
+                    NewCardLst.Add(cardi);
+                else if (cardi.status == Cardstatus.Reviewed)
+                    ReviewedCardLst.Add(cardi);
+                else
+                    LearningCardLst.Add(cardi);
+            }
+        }
+
+        /// <summary>
+        /// 让当前词书表补齐程序需要的列（#117 研究间隔/评分/到期时间，#129 词组两列）。
+        /// SelectWordList 与启动时的 EnsureCurrentBookColumns 都走这里，避免两处各写一份 ALTER；
+        /// 已经有这些列的表只多一次 PRAGMA，不会重复 ALTER。
+        /// </summary>
+        private void EnsureWordColumns()
+        {
             String cmdtext = $"PRAGMA table_info({TABLE_NAME})";
             SQLiteCommand Update = DataBase.CreateCommand();
             Update.CommandText = cmdtext;
@@ -288,19 +311,31 @@ namespace ToastFish.Model.SqliteControl
                 Update.CommandText = $"ALTER TABLE {TABLE_NAME} ADD COLUMN dateLearingDue TEXT  DEFAULT NULL";
                 Update.ExecuteNonQuery();
             }
-            Word Temp = new Word();
-            AllWordList = DataBase.Query<Word>("select * from " + TABLE_NAME, Temp);
-
-            foreach (var Word in AllWordList)
+            // 词组与词组释义（#129）：KaoYan_3 这类精简表原本没有这两列，
+            // 补齐后与其它词库结构一致，作者可直接在库里补录「这个词的常用搭配」，
+            // 单词弹窗会自动显示「◆ phrase / phraseCN」（字段为空则不占位）。
+            if (HeadTileList.Contains("phrase") == false)
             {
-                Card cardi = new Card(Word);
-                if (cardi.status == Cardstatus.New)
-                    NewCardLst.Add(cardi);
-                else if (cardi.status == Cardstatus.Reviewed)
-                    ReviewedCardLst.Add(cardi);
-                else
-                    LearningCardLst.Add(cardi);
+                Update.CommandText = $"ALTER TABLE {TABLE_NAME} ADD COLUMN phrase TEXT DEFAULT NULL";
+                Update.ExecuteNonQuery();
             }
+            if (HeadTileList.Contains("phraseCN") == false)
+            {
+                Update.CommandText = $"ALTER TABLE {TABLE_NAME} ADD COLUMN phraseCN TEXT DEFAULT NULL";
+                Update.ExecuteNonQuery();
+            }
+        }
+
+        /// <summary>
+        /// 启动时给当前词书补齐列（#129）。作者想直接在 inami.db 里给考研词频词汇补录
+        /// phrase / phraseCN，但那张表原本只有 16 列、连字段都不存在；以前要等某一轮学习
+        /// 走到 SelectWordList 才会补，现在程序一启动就在后台补好，随时可编辑。
+        /// </summary>
+        public void EnsureCurrentBookColumns()
+        {
+            if (TABLE_NAME.IndexOf("自定义") != -1)
+                TABLE_NAME = "GRE_2";
+            EnsureWordColumns();
         }
 
         public void updateCardDateBase(List<Card> cardList)

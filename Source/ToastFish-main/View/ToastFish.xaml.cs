@@ -65,6 +65,14 @@ namespace ToastFish
             // #127：旧版把有道 type 参数写反了（「英式」缓存里是美音），启动时后台清掉这批缓存让它们重下
             ThreadPool.QueueUserWorkItem(_ => ToastFish.Model.Download.DownloadMp3.CleanupLegacyAccentCache());
 
+            // #129：后台给当前词书补齐缺失的列（词组 phrase / phraseCN 等），
+            // 让作者启动后就能直接在 inami.db 里补录，不必先学一轮把列"跑"出来
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { using (var se = new Select()) se.EnsureCurrentBookColumns(); }
+                catch { /* 补列失败不能影响启动，真正加载词表时 SelectWordList 还会再试一次 */ }
+            });
+
             // 启动惊喜复习后台监控
             SurpriseReviewManager.Start();
 
