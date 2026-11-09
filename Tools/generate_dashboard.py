@@ -10,10 +10,11 @@ import sqlite3
 import json
 import math
 import os
+import re
 import sys
 import socket
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as _date
 from collections import defaultdict
 
 # ============================================================
@@ -113,9 +114,11 @@ def read_all_learned_words(conn, tables):
             rank_expr = 'wordRank' if 'wordRank' in cols else '0 AS wordRank'
             pos_expr = 'pos' if 'pos' in cols else "'' AS pos"
             tran_expr = 'tranCN' if 'tranCN' in cols else "'' AS tranCN"
+            # #126：概览页需要按「上次复习日期 + 间隔」算复习欠账，老表没有这列时给 NULL
+            dlr_expr = 'dateLastReviewed' if 'dateLastReviewed' in cols else 'NULL AS dateLastReviewed'
             rows = conn.execute(
                 f'SELECT {rank_expr}, headWord, {pos_expr}, {tran_expr}, difficulty, '
-                f'daysBetweenReviews, lastScore, status FROM [{t}] WHERE status != 0'
+                f'daysBetweenReviews, lastScore, status, {dlr_expr} FROM [{t}] WHERE status != 0'
             ).fetchall()
         except Exception:
             continue
@@ -250,6 +253,44 @@ BOOK_NAMES = {
 }
 
 
+# 「顽固词」判定（2026-10-18 放宽，2026-11-09 提到模块级供概览页复用 —— #126）。
+# 本作 status=5 就是 Reviewed（已学完），已学词几乎全为 5；Good=0.8 又恰好是"勉强通过"，
+# 绝大多数词的 lastScore 就是 0.8/1.0 —— 旧标准 `lastScore < 0.8 or status != 5` 因此
+# 经常一个都选不出来（尤其是只有 0.8/1.0 的词库）。现在改成"失败 or （勉强通过 + 另一个
+# 变难信号）"，既不会空、也不至于把一半词都算成顽固：
+#   ① 最近一次 < 0.80（Hard / Again）—— 直接失败；
+#   ② 最近一次 < 0.90（只是 Good）且 难度 ≥ 0.30 或 间隔 ≤ 7 天 —— 勉强通过，但确实难/刚被打回；
+#   ③ 难度 ≥ 0.45 —— 极难词，即使拿了 Easy 也值得盯；
+#   ④ status != 5 —— 仍在学习 / 重学阶段。
+STUBBORN_FAIL = 0.8
+STUBBORN_WEAK = 0.9
+STUBBORN_DIFF = 0.3
+STUBBORN_INTERVAL = 7.0
+STUBBORN_HARD = 0.45
+
+
+def is_stubborn(w):
+    if w['status'] != 5:
+        return True
+    score = w.get('lastScore')
+    if score is None:
+        return True
+    if score < STUBBORN_FAIL:
+        return True
+    if score < STUBBORN_WEAK and (w['difficulty'] >= STUBBORN_DIFF
+                                  or w['daysBetweenReviews'] <= STUBBORN_INTERVAL):
+        return True
+    return w['difficulty'] >= STUBBORN_HARD
+
+
+def _parse_ymd(s):
+    """把 '2026/9/9 8:00:00' 之类的日期串解析成 date；解析不了返回 None。"""
+    m = re.match(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', str(s or ''))
+    if not m:
+        return None
+    return _date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
 def compute_page1(studylog, all_words, counts, book_stats, current_book):
     """学习概览页指标。
 
@@ -287,16 +328,71 @@ def compute_page1(studylog, all_words, counts, book_stats, current_book):
     book_total = cur_stats.get('total') or counts.get(current_book, {}).get('number', 0)
     book_current = cur_stats.get('learned') or counts.get(current_book, {}).get('current', 0)
 
+    # --- 复合指标（#126）：原来的「当前连续 / 最长连续 / 有效天数」三张卡本质都是天数，
+    # 信息重复；「最高单日词数」只是一次性尖峰，对日常使用没有指导意义。改成下面这批
+    # 「多数据结合」的统计，单卡自带一行小字副标题说明口径。
+    scored_words = [w for w in all_words if w.get('lastScore') is not None]
+    good_share = (sum(1 for w in scored_words if w['lastScore'] >= 0.8) / len(scored_words)
+                  if scored_words else 0.0)
+
+    # 复习欠账：按「上次复习日期 + 当前间隔」判断是否已到期；到期还没复习的就是欠账
+    due_total = 0
+    on_time = 0
+    overdue_words = 0
+    overdue_over30 = 0
+    for w in all_words:
+        dlr = _parse_ymd(w.get('dateLastReviewed'))
+        interval = w.get('daysBetweenReviews') or 0
+        if not dlr or interval <= 0:
+            continue
+        due_total += 1
+        due_date = dlr + timedelta(days=max(1, int(round(interval))))
+        late = (today - due_date).days
+        if late <= 0:
+            on_time += 1
+        else:
+            overdue_words += 1
+            if late > 30:
+                overdue_over30 += 1
+    on_time_rate = (on_time / due_total) if due_total else 0.0
+
+    # 记忆健康度 = 正确率 40% + 「最近评分 ≥0.8 的词占比」30% + 按时复习率 30%
+    health = round(accuracy * 0.4 + good_share * 100 * 0.3 + on_time_rate * 100 * 0.3, 1)
+
+    # 顽固词：与学术页共用 is_stubborn()，避免同一份报告里两页口径打架
+    stubborn_count = sum(1 for w in all_words if is_stubborn(w))
+
+    # 学习密度：首末学习日之间「有学习记录的天数」占比
+    span_days = (today - datetime.strptime(dates[0], '%Y-%m-%d').date()).days + 1 if dates else 0
+    density = (total_days / span_days * 100) if span_days > 0 else 0.0
+    active30 = sum(1 for r in studylog if (today - _parse_ymd(r['date'])).days <= 30) if dates else 0
+    recent14 = [r for r in studylog if (today - _parse_ymd(r['date'])).days <= 14] if dates else []
+    total14 = sum(r['wordsReviewed'] for r in recent14)
+    avg14 = total14 / 14.0
+
     kpis = [
         {'icon': '📝', 'value': total_reviewed, 'label': '累计学习词次', 'format': 'int'},
         {'icon': '📖', 'value': len(all_words), 'label': '已学单词数（全库去重）', 'format': 'int'},
-        {'icon': '🔥', 'value': current_streak, 'label': '当前连续天数', 'format': 'int'},
-        {'icon': '🏅', 'value': max_streak, 'label': '最长连续天数', 'format': 'int'},
-        {'icon': '📅', 'value': total_days, 'label': '有效学习天数', 'format': 'int'},
-        {'icon': '🎯', 'value': round(accuracy, 1), 'label': '总正确率 %', 'format': 'pct'},
-        {'icon': '⚡', 'value': max_daily, 'label': '最高单日词数', 'format': 'int'},
+        {'icon': '🧠', 'value': int(round(health)), 'label': '记忆健康度',
+         'format': 'int', 'sub': f'正确率 {accuracy:.1f}% · 按时复习 {on_time_rate * 100:.0f}%'},
+        {'icon': '🧾', 'value': overdue_words, 'label': '复习欠账（词）',
+         'format': 'int', 'sub': f'逾期超 30 天 {overdue_over30}'},
+        {'icon': '🪨', 'value': round(stubborn_count / len(all_words) * 100, 1) if all_words else 0,
+         'label': '顽固词占比 %', 'format': 'pct',
+         'sub': f'{stubborn_count} / {len(all_words)} 词'},
+        {'icon': '📅', 'value': round(density, 1), 'label': '学习密度 %', 'format': 'pct',
+         'sub': f'近 30 天 {active30} / 30 天'},
+        {'icon': '⚡', 'value': round(avg14, 1), 'label': '日均学习量（近 14 天）', 'format': 'dec',
+         'sub': f'近 14 天共 {total14} 词次'},
         {'icon': '📚', 'value': round(book_current / book_total * 100, 1) if book_total > 0 else 0,
-         'label': f"{BOOK_NAMES.get(current_book, current_book)} 进度 %", 'format': 'pct'},
+         'label': f"{BOOK_NAMES.get(current_book, current_book)} 进度 %", 'format': 'pct',
+         'sub': f'{book_current} / {book_total} 词'},
+    ]
+
+    # 概览页主视觉（hero）用的两个连续天数，单独给，避免和下面 6 张卡重复
+    hero_streaks = [
+        {'label': '当前连续天数', 'value': current_streak},
+        {'label': '最长连续天数', 'value': max_streak},
     ]
 
     # --- 每日趋势 / 累计（补全缺失日期，x 轴才是等距时间轴） ---
@@ -392,6 +488,7 @@ def compute_page1(studylog, all_words, counts, book_stats, current_book):
 
     return {
         'kpis': kpis,
+        'heroStreaks': hero_streaks,
         'dailyTrend': daily_trend,
         'cumulative': cumulative,
         'calendarData': calendar_data,
@@ -547,20 +644,7 @@ def compute_page2(studylog, words):
     #   ③ 难度 ≥ 0.45 —— 极难词，即使拿了 Easy 也值得盯；
     #   ④ status != 5 —— 仍在学习 / 重学阶段。
     # 排序用"顽固度"而不是单看难度，否则评分 0.4 但难度 0.1 的词永远排不进来。
-    STUBBORN_FAIL = 0.8
-    STUBBORN_WEAK = 0.9
-    STUBBORN_DIFF = 0.3
-    STUBBORN_INTERVAL = 7.0
-    STUBBORN_HARD = 0.45
-    def _is_stubborn(w):
-        if w['status'] != 5:
-            return True
-        if w['lastScore'] < STUBBORN_FAIL:
-            return True
-        if w['lastScore'] < STUBBORN_WEAK and (w['difficulty'] >= STUBBORN_DIFF
-                                               or w['daysBetweenReviews'] <= STUBBORN_INTERVAL):
-            return True
-        return w['difficulty'] >= STUBBORN_HARD
+    _is_stubborn = is_stubborn   # 判定口径只有一份，见模块级 is_stubborn()（#126）
     def _severity(w):
         # 0.6 权重给评分（失败程度），0.4 给难度（0.5 封顶，难度本身罕见超过它）
         return (1.0 - w['lastScore']) * 0.6 + min(1.0, w['difficulty'] / 0.5) * 0.4

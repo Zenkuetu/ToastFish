@@ -301,7 +301,7 @@ namespace ToastFish.Model.PushControl
         {
             try
             {
-                string phonemeStr = Select.ENG_TYPE == 1 ? w.usPhone : w.ukPhone;
+                string phonemeStr = PushWords.PhonemeOf(w);   // #125：口音只认这一个入口
                 string phoneme = string.IsNullOrEmpty(phonemeStr) ? "" : "  /" + phonemeStr + "/";
                 string posTran = string.IsNullOrEmpty(w.pos) ? w.tranCN : w.pos + " " + w.tranCN;
                 string sentence = (w.sentence != null && w.sentence.Length < 50) ? w.sentence : "";

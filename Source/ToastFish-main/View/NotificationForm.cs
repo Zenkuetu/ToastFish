@@ -1663,6 +1663,7 @@ namespace ToastFish.View
                 bool readingArranged = false;
                 Action ArrangeReadingStage = () =>
                 {
+                    form.ResetZoomForLayout();   // 重排前回 1x（#128）
                     int fixedTop = rtb.Top;   // rtb 顶部（注意：不能用 y——y 在 rtb 定位后已累加到 rtb 底部）
                     int overhead = 8 + panelH_reading + 10;
                     int content = essayContentH > 0 ? essayContentH : (rtb.TextLength > 0 ? RealRtbHeight(rtb) : 0);
@@ -1687,6 +1688,7 @@ namespace ToastFish.View
                 //（短文区滚动），最后才让面板自己滚动（#108 / #111）。测验与精读共用这一套公式。
                 Action<int> fitPanel = contentH =>
                 {
+                    form.ResetZoomForLayout();   // 重排前回 1x（#128）
                     int rtbTop = rtb.Top;
                     int essayH = Math.Max(60, rtb.Height);
                     const int minPassageH = 150;             // 面板再高，短文也至少留这么高
@@ -1752,6 +1754,7 @@ namespace ToastFish.View
                 // 否则精读阶段的 TextBox/Label 会一直堆在窗口上。
                 Action clearBottomPanel = () =>
                 {
+                    form.ResetZoomForLayout();   // 切阶段前回 1x，新面板按 1x 量高（#128）
                     bottomPanel.SuspendLayout();
                     var olds = new System.Collections.Generic.List<Control>();
                     foreach (Control c in bottomPanel.Controls) olds.Add(c);
@@ -1803,6 +1806,9 @@ namespace ToastFish.View
                     if (quizIdx >= 0) return;
                     if (!hasQuiz) { form.Close(); callback(0); return; }
                     quizIdx = 0;
+                    // 测验控件一律在 1x 下新建（#128）：放大态下新建会让宽度沿用放大后的值，
+                    // 松开 Alt 时又只还原旧控件，文字就会越过窗口右边缘。
+                    form.ResetZoomForLayout();
                     // 划重点开关属于阅读阶段：进测验后面板按钮被清空，这里顺手关掉模式（已画的下划线保留）
                     rtb.MarkupEnabled = false;
                     rtb.SelectionLength = 0;
@@ -1826,6 +1832,7 @@ namespace ToastFish.View
                     Action showNext = null;
                     showNext = () =>
                     {
+                        form.ResetZoomForLayout();   // 每题重排前先回 1x，量出来的高度才和最终布局一致（#128）
                         if (qi < questions.Count)
                         {
                             // 先按满宽排版量真实内容高；若放不下（需要面板滚动），预留滚动条宽度重排一次，
@@ -4481,6 +4488,34 @@ form.PlaceBottomRight();
             _zoomPaddings = ps.ToArray();
             _zoomRightMargins = rms.ToArray();
             _zoomAutoScroll = AutoScrollMinSize;
+        }
+
+        /// <summary>
+        /// 布局即将变化时调用（#128）：先把放大还原到 1x，再丢掉缩放基准，
+        /// 让下一次按住 Alt 放大按「新布局」重新 CaptureZoomBase()。
+        ///
+        /// 为什么必须这么做：基准是「放大那一刻」记下的控件 bounds。若在放大态下切到测验/精读，
+        /// 新控件不在基准里，而松开 Alt 时 ApplyZoom(1f) 会把 rtb / bottomPanel 还原成阅读阶段的
+        /// 旧尺寸（面板高度 70），选项被整个裁掉；新控件也没被缩回 1x，文字越过窗口右边缘。
+        /// </summary>
+        public void ResetZoomForLayout()
+        {
+            if (IsDisposed) return;
+            if (_zoom > 1f)
+            {
+                try { ApplyZoom(1f); }
+                catch { }
+            }
+            _zoom = 1f;
+            _baseWidth = 0;
+            _baseHeight = 0;
+            _modHeldMs = 0;
+            _zoomControls = null;
+            _zoomBounds = null;
+            _zoomFonts = null;
+            _zoomPaddings = null;
+            _zoomRightMargins = null;
+            _zoomAutoScroll = Size.Empty;
         }
 
         /// <summary>切换窗口重绘（缩放时不闪）</summary>

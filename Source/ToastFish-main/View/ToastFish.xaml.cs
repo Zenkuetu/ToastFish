@@ -62,6 +62,9 @@ namespace ToastFish
             // 所以播个没声音的音频先。
             PlayMute();
 
+            // #127：旧版把有道 type 参数写反了（「英式」缓存里是美音），启动时后台清掉这批缓存让它们重下
+            ThreadPool.QueueUserWorkItem(_ => ToastFish.Model.Download.DownloadMp3.CleanupLegacyAccentCache());
+
             // 启动惊喜复习后台监控
             SurpriseReviewManager.Start();
 
@@ -178,7 +181,10 @@ namespace ToastFish
         System.Windows.Forms.ToolStripMenuItem Begin = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem Settings = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SetNumber = new System.Windows.Forms.ToolStripMenuItem();
-        System.Windows.Forms.ToolStripMenuItem SetEngType = new System.Windows.Forms.ToolStripMenuItem();
+        // 读音口音（#125）：原来是「英标类型」+ 1/2 数字输入框，改成两个勾选项
+        System.Windows.Forms.ToolStripMenuItem SetAccent = new System.Windows.Forms.ToolStripMenuItem();
+        System.Windows.Forms.ToolStripMenuItem AccentUS = new System.Windows.Forms.ToolStripMenuItem();
+        System.Windows.Forms.ToolStripMenuItem AccentUK = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem ImportWords = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SelectBook = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SelectJpBook = new System.Windows.Forms.ToolStripMenuItem();
@@ -218,8 +224,15 @@ namespace ToastFish
             SetNumber.Text = "单词个数";
             SetNumber.Click += new EventHandler(SetNumber_Click);
 
-            SetEngType.Text = "英标类型";
-            SetEngType.Click += new EventHandler(SetEngType_Click);
+            SetAccent.Text = "读音口音（" + AccentLabel(Select.ENG_TYPE) + "）";
+            AccentUS.Text = "美式发音 US";
+            AccentUK.Text = "英式发音 UK";
+            AccentUS.Click += new EventHandler((s, e) => ApplyAccent(1));
+            AccentUK.Click += new EventHandler((s, e) => ApplyAccent(2));
+            AccentUS.Checked = Select.ENG_TYPE == 1;
+            AccentUK.Checked = Select.ENG_TYPE == 2;
+            SetAccent.DropDownItems.Add(AccentUS);
+            SetAccent.DropDownItems.Add(AccentUK);
 
             SetAutoPlay.Text="自动播放";
             SetAutoPlay.Click += new EventHandler(AutoPlay_Click);
@@ -397,7 +410,6 @@ namespace ToastFish
 
             Cms.Items.Add(Begin);
             //Cms.Items.Add(SetNumber);
-            //Cms.Items.Add(SetEngType);
             Cms.Items.Add(ImportWords);
             Cms.Items.Add(SelectBook);
             Cms.Items.Add(SelectJpBook);
@@ -430,7 +442,7 @@ namespace ToastFish
             ((ToolStripDropDownItem)Cms.Items[4]).DropDownItems.Add(RandomGoin);
             ((ToolStripDropDownItem)Cms.Items[4]).DropDownItems.Add(RandomJpWord);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetNumber);
-            ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetEngType);
+            ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAccent);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAutoPlay);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAutoLog);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAiEssay);
@@ -747,10 +759,39 @@ namespace ToastFish
             thread.Start();
         }
 
-        private void SetEngType_Click(object sender, EventArgs e)
+        /// <summary>口音名称，只用于菜单文案（1 = 美式，2 = 英式）。</summary>
+        private static string AccentLabel(int engType)
         {
-            Thread thread = new Thread(new ThreadStart(pushWords.SetEngType));
-            thread.Start();
+            return engType == 1 ? "美式 US" : "英式 UK";
+        }
+
+        /// <summary>
+        /// 切换读音口音（#125）：1 = 美式，2 = 英式。
+        /// 这一个值同时决定弹窗里的音标（usPhone / ukPhone）和发音音频（有道 dictvoice 的 type=1 / type=2，
+        /// 缓存文件名带 _us / _uk 后缀所以两套音频互不覆盖），并写回 Global.EngType，重启后保持。
+        /// </summary>
+        private void ApplyAccent(int engType)
+        {
+            if (engType != 1 && engType != 2) return;
+            Select.ENG_TYPE = engType;
+            try
+            {
+                using (Select temp = new Select())
+                {
+                    temp.UpdateGlobalConfig();
+                }
+            }
+            catch (Exception ex)
+            {
+                // 存不进去也要先把本次会话切过来，下次启动再回退到旧值
+                ToastBridge.ShowMessage("ToastFish", "口音没记住：" + ex.Message, 4000);
+                return;
+            }
+            AccentUS.Checked = engType == 1;
+            AccentUK.Checked = engType == 2;
+            SetAccent.Text = "读音口音（" + AccentLabel(engType) + "）";
+            ToastBridge.ShowMessage("ToastFish",
+                engType == 1 ? "已切换为美式发音（音标也一起切）" : "已切换为英式发音（音标也一起切）", 3000);
         }
 
 

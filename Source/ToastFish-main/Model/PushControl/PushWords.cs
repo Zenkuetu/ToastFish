@@ -699,21 +699,6 @@ namespace ToastFish.Model.PushControl
             }
         }
 
-        public void SetEngType()
-        {
-            string input = Microsoft.VisualBasic.Interaction.InputBox(
-                "请选择发音类型：\n1 = 美式发音\n2 = 英式发音", "ToastFish - 英标类型",
-                Select.ENG_TYPE.ToString());
-            if (int.TryParse(input, out int engType) && (engType == 1 || engType == 2))
-            {
-                Select.ENG_TYPE = engType;
-                string rst = engType == 1 ? "美国" : "英国";
-                PushMessage("已设置英语类型为：" + rst);
-                Select Temp = new Select();
-                Temp.UpdateGlobalConfig();
-            }
-        }
-
         public double pushCard(Card card, Cardstatus cardstatus, int numNewCards, int numLearingCards, int numReviewedCards)
         {
             Word CurrentWord = card.word;
@@ -721,17 +706,7 @@ namespace ToastFish.Model.PushControl
             double result = -1;
             bool isFinished = false;
             string word_pron, word_save_name;
-            switch (Select.ENG_TYPE)
-            {
-                case 1:
-                    word_save_name = CurrentWord.headWord + "_us";
-                    word_pron = CurrentWord.headWord + "&type=1";
-                    break;
-                default:
-                    word_save_name = CurrentWord.headWord + "_uk";
-                    word_pron = CurrentWord.headWord + "&type=2";
-                    break;
-            }
+            AccentVoice(CurrentWord.headWord, out word_save_name, out word_pron);
             while (isFinished != true)
             {
                 // 先弹窗，再播语音
@@ -1306,17 +1281,7 @@ namespace ToastFish.Model.PushControl
                     {
                         pushWords.WORD_CURRENT_STATUS = 3;
                         string word_pron, word_save_name;
-                        switch (Select.ENG_TYPE)
-                        {
-                            case 1:
-                                word_save_name = CurrentWord.headWord + "_us";
-                                word_pron = CurrentWord.headWord + "&type=1";
-                                break;
-                            default:
-                                word_save_name = CurrentWord.headWord + "_uk";
-                                word_pron = CurrentWord.headWord + "&type=2";
-                                break;
-                        }
+                        AccentVoice(CurrentWord.headWord, out word_save_name, out word_pron);
                         List<string> words = new List<string>();
                         //将Person对象放入集合
                         words.Add(word_save_name);
@@ -1455,6 +1420,44 @@ namespace ToastFish.Model.PushControl
             ToastBridge.ShowMessage("ToastFish", Message);
         }
 
+        // === 读音口音（#125 / 3.4.9）===
+        // 口音只有一个开关 Select.ENG_TYPE（1 美式 / 2 英式，写回 Global.EngType），
+        // 之前音标选择在 3 处各写一遍 switch、音频缓存名/有道参数在 2 处各写一遍，
+        // 这里收拢成两个helper，弹窗和音频都只认这两个入口。
+
+        /// <summary>
+        /// 按当前口音取音标。选中的那一侧为空时退回另一侧，免得切到美式后整屏没有音标
+        /// （考研词频等词书本身就没有音标列，两侧都空就返回空字符串）。
+        /// </summary>
+        internal static string PhonemeOf(Word word)
+        {
+            if (word == null) return "";
+            string us = word.usPhone ?? "";
+            string uk = word.ukPhone ?? "";
+            if (Select.ENG_TYPE == 1) return us.Length > 0 ? us : uk;
+            return uk.Length > 0 ? uk : us;
+        }
+
+        /// <summary>
+        /// 按当前口音给出音频缓存文件名与有道发音参数。**有道 type=1 是英音、type=2 是美音**
+        /// （查 https://dict.youdao.com/w/eng/epoch/ 的 data-rel：英 [ˈiːpɒk] → epoch&amp;type=1，
+        /// 美 [ˈepək] → epoch&amp;type=2），#127 之前这里写反了，导致「选英式放美音」。
+        /// 缓存名带 _us / _uk 后缀，两套音频互不覆盖，来回切不用重下。
+        /// </summary>
+        internal static void AccentVoice(string headWord, out string saveName, out string urlParam)
+        {
+            if (Select.ENG_TYPE == 1)
+            {
+                saveName = headWord + "_us";
+                urlParam = headWord + "&type=2";   // 美音
+            }
+            else
+            {
+                saveName = headWord + "_uk";
+                urlParam = headWord + "&type=1";   // 英音
+            }
+        }
+
         /// <summary>
         /// 推送一个单词
         /// </summary>
@@ -1462,16 +1465,7 @@ namespace ToastFish.Model.PushControl
         public void PushOneWord(Word CurrentWord)
         {
             // // History.Clear()
-            string Phoneme;
-            switch (Select.ENG_TYPE)
-            {
-                case 1:
-                    Phoneme = CurrentWord.usPhone;
-                    break;
-                default:
-                    Phoneme = CurrentWord.ukPhone;
-                    break;
-            }
+            string Phoneme = PhonemeOf(CurrentWord);
             string WordPhonePosTran = CurrentWord.headWord + "  (" + Phoneme + ")\n" + CurrentWord.pos + ". " + CurrentWord.tranCN;
             string SentenceTran = "";
             if (CurrentWord.sentence != null && CurrentWord.sentence.Length < 50)
@@ -1488,16 +1482,7 @@ namespace ToastFish.Model.PushControl
         public void PushOneWordSM2(Word CurrentWord, Cardstatus cardstatus, int numNewCards, int numLearingCards, int numReviewedCards)
         {
             // // History.Clear()
-            string Phoneme;
-            switch (Select.ENG_TYPE)
-            {
-                case 1:
-                    Phoneme = CurrentWord.usPhone;
-                    break;
-                default:
-                    Phoneme = CurrentWord.ukPhone;
-                    break;
-            }
+            string Phoneme = PhonemeOf(CurrentWord);
             string word = CurrentWord.headWord;
             string phoneme = string.IsNullOrEmpty(Phoneme) ? "" : "  /" + Phoneme + "/";
             string posTran = string.IsNullOrEmpty(CurrentWord.pos) ? CurrentWord.tranCN : CurrentWord.pos + " " + CurrentWord.tranCN;

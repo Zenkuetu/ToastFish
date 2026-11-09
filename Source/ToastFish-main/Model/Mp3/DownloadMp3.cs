@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -23,6 +23,33 @@ namespace ToastFish.Model.Download
 
         /// <summary>下载锁：串行化 MP3 下载，避免并发写同一临时文件。</summary>
         private static readonly object _dlLock = new object();
+
+        /// <summary>
+        /// #127：3.4.9 之前的 _us/_uk 缓存是按**写反了的** youdao type 参数下载的
+        /// （「英式」缓存里装的是美音），启动时删掉这些文件让它们按正确口音重下。
+        /// 只匹配 _us.mp3 / _uk.mp3，不碰老版本无后缀的单词缓存；失败静默。
+        /// </summary>
+        public static void CleanupLegacyAccentCache()
+        {
+            try
+            {
+                string cache = ExeDir + @"\Mp3Cache";
+                if (!System.IO.Directory.Exists(cache)) return;
+                string marker = cache + @"\.accent_v2";          // 只清一次，别每次启动都把正确缓存删了
+                if (System.IO.File.Exists(marker)) return;
+                foreach (string f in System.IO.Directory.GetFiles(cache, "*.mp3"))
+                {
+                    string n = System.IO.Path.GetFileName(f);
+                    if (n.EndsWith("_us.mp3", StringComparison.OrdinalIgnoreCase)
+                        || n.EndsWith("_uk.mp3", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { System.IO.File.Delete(f); } catch { }
+                    }
+                }
+                try { System.IO.File.WriteAllText(marker, "accent cache reset for #127 " + DateTime.Now.ToString("s")); } catch { }
+            }
+            catch { }
+        }
 
         public bool HttpDownload(string Url, string Name)
         {

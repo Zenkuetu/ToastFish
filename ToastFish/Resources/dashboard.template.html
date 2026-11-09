@@ -501,6 +501,15 @@ body::after {
   letter-spacing: 0.8px;
   color: var(--text-dim);
 }
+/* #126：复合指标的副标题（口径说明，比标签再暗一档） */
+.kpi-card .kpi-sub {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.35;
+  letter-spacing: 0.3px;
+  color: var(--text-dim);
+  opacity: 0.72;
+}
 .kpi-card .jp-decor {
   position: absolute;
   right: 10px; bottom: 8px;
@@ -679,10 +688,12 @@ body::after {
   z-index: 3;
 }
 .calendar-day.count-0 { background: rgba(255, 255, 255, 0.028); }
-.calendar-day.count-1 { background: rgba(0, 240, 255, 0.18); }
-.calendar-day.count-2 { background: rgba(0, 240, 255, 0.34); }
-.calendar-day.count-3 { background: rgba(0, 240, 255, 0.58); box-shadow: 0 0 8px rgba(0, 240, 255, 0.2); }
-.calendar-day.count-4 { background: linear-gradient(160deg, rgba(0, 240, 255, 0.95), rgba(0, 190, 255, 0.75)); box-shadow: 0 0 12px rgba(0, 240, 255, 0.5); }
+.calendar-day.count-1 { background: rgba(0, 240, 255, 0.16); }
+.calendar-day.count-2 { background: rgba(0, 240, 255, 0.32); }
+.calendar-day.count-3 { background: rgba(0, 240, 255, 0.52); box-shadow: 0 0 8px rgba(0, 240, 255, 0.18); }
+.calendar-day.count-4 { background: rgba(0, 240, 255, 0.76); box-shadow: 0 0 10px rgba(0, 240, 255, 0.34); }
+.calendar-day.count-5 { background: linear-gradient(135deg, #3E7BFF 0%, #8A5CFF 48%, #E24DFF 100%); box-shadow: 0 0 12px rgba(160, 110, 255, 0.62); }
+.calendar-day.count-5:hover { box-shadow: 0 0 16px rgba(190, 120, 255, 0.75); }
 .calendar-day.future {
   background: transparent;
   border: 1px dashed rgba(255, 255, 255, 0.07);
@@ -1933,9 +1944,10 @@ const PageOverview = {
     const heroKpi = computed(() => kpis.value[0] || { label: '', value: 0 })
     const subKpi = computed(() => kpis.value[1] || { label: '', value: 0 })
     const restKpis = computed(() => kpis.value.slice(2))
-    const statKpis = computed(() => {
-      const arr = kpis.value.slice(2)
-      return [arr[2] || { label: '', value: 0 }, arr[3] || { label: '', value: 0 }]
+    // 主视觉的两个连续天数单独取（#126）：以前从 kpis.slice(2) 里拿，和下面 6 张卡重复
+    const heroStats = computed(() => {
+      const arr = props.data?.page1?.heroStreaks || []
+      return [arr[0] || { label: '', value: 0 }, arr[1] || { label: '', value: 0 }]
     })
     const spark = computed(() => {
       const trend = (props.data?.page1?.dailyTrend || []).slice(-46)
@@ -1943,7 +1955,7 @@ const PageOverview = {
       return trend.map(r => ({ h: Math.max(3, Math.round((r.words || 0) / max * 100)) }))
     })
     return { dailyBar, cumArea, scoreStack, accuracyLine, diffHist, intervalDist, startedBooks,
-             kpis, heroKpi, subKpi, restKpis, statKpis, spark, d: props.data?.page1 }
+             kpis, heroKpi, subKpi, restKpis, heroStats, spark, d: props.data?.page1 }
   },
   template: `
 <div class="page page-overview">
@@ -1970,12 +1982,12 @@ const PageOverview = {
           <span class="hs-label">{{ subKpi.label }}</span>
         </div>
         <div class="hs-item">
-          <span class="hs-val cyan"><animated-number :value="statKpis[0].value" /></span>
-          <span class="hs-label">{{ statKpis[0].label }}</span>
+          <span class="hs-val cyan"><animated-number :value="heroStats[0].value" /></span>
+          <span class="hs-label">{{ heroStats[0].label }}</span>
         </div>
         <div class="hs-item">
-          <span class="hs-val cyan"><animated-number :value="statKpis[1].value" :precision="1" suffix="%" /></span>
-          <span class="hs-label">{{ statKpis[1].label }}</span>
+          <span class="hs-val cyan"><animated-number :value="heroStats[1].value" /></span>
+          <span class="hs-label">{{ heroStats[1].label }}</span>
         </div>
       </div>
       <div class="hero-spark" aria-hidden="true">
@@ -1986,9 +1998,10 @@ const PageOverview = {
       <div v-for="kpi in restKpis" :key="kpi.label" class="kpi-card">
         <span class="kpi-icon">{{ kpi.icon }}</span>
         <div class="kpi-value" :class="kpi.format">
-          <animated-number :value="kpi.value" :precision="kpi.format === 'pct' ? 1 : 0" :suffix="kpi.format === 'pct' ? '%' : ''" />
+          <animated-number :value="kpi.value" :precision="kpi.format === 'int' ? 0 : 1" :suffix="kpi.format === 'pct' ? '%' : ''" />
         </div>
         <div class="kpi-label">{{ kpi.label }}</div>
+        <div class="kpi-sub" v-if="kpi.sub">{{ kpi.sub }}</div>
         <span class="jp-decor">トーストフィッシュ</span>
       </div>
     </div>
@@ -2020,14 +2033,14 @@ const PageOverview = {
     <div class="sec-head"><span class="sec-num">02</span><span class="sec-title">时间与进度</span><i class="sec-line"></i><span class="sec-jp">カレンダー</span></div>
     <div class="chart-grid-2x2">
       <div class="chart-card">
-        <h3>学习日历 <span class="h3-note">色阶：0 · 1-19 · 20-49 · 50-99 · 100+ 词</span></h3>
+        <h3>学习日历 <span class="h3-note">色阶：0-10 · 10-50 · 50-100 · 100-200 · 200+ 词</span></h3>
         <div class="calendar-grid">
           <div class="calendar-dow"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
           <template v-for="(week, wi) in calendarWeeks" :key="wi">
             <div class="calendar-week">
               <div v-for="day in week" :key="day.date"
                    class="calendar-day"
-                   :class="[day.future ? 'future' : 'count-' + (day.count >= 100 ? 4 : day.count >= 50 ? 3 : day.count >= 20 ? 2 : day.count > 0 ? 1 : 0)]"
+                   :class="[day.future ? 'future' : 'count-' + (day.count <= 0 ? 0 : day.count <= 10 ? 1 : day.count <= 50 ? 2 : day.count <= 100 ? 3 : day.count <= 200 ? 4 : 5)]"
                    :title="day.future ? day.date + '（未到）' : day.date + ': ' + day.count + ' 词'"></div>
             </div>
           </template>
