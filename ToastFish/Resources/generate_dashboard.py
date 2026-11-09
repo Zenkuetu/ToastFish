@@ -159,6 +159,81 @@ def read_essay_logs(conn):
         return []
 
 
+def compute_wrong_words(essay_logs, conn):
+    """错词本（#117）：把完形填空里答错的空聚合成词表。
+
+    answers 里每项的 ans 就是该空的正确词（阅读理解的 answers 存的是选项下标，
+    没有词级信息，天然被跳过）。同一本书同一个词错多次只聚一条。
+    再回查**该词书本身**（不限已学），拿到这个词真实的 status / lastScore / 间隔 ——
+    只查已学词会把「词在书里但还没学过」误标成「不在词库里」。
+    """
+    agg = {}
+    total_wrong = 0
+    for log in essay_logs or []:
+        book = log.get('bookName') or ''
+        created = log.get('createdAt') or ''
+        for a in (log.get('answers') or []):
+            if not isinstance(a, dict):
+                continue
+            if a.get('ok'):
+                continue
+            ans = a.get('ans')
+            if not isinstance(ans, str):
+                continue
+            ans = ans.strip()
+            if not ans:
+                continue
+            total_wrong += 1
+            key = (book, ans.lower())
+            e = agg.get(key)
+            if e is None:
+                e = {'word': ans, 'book': book,
+                     'bookName': BOOK_NAMES.get(book, book),
+                     'times': 0, 'lastAt': ''}
+                agg[key] = e
+            e['times'] += 1
+            if created > e['lastAt']:
+                e['lastAt'] = created
+
+    # --- 按词书查这些词的现状（含 status=0 的新词） ---
+    info = {}
+    try:
+        tables = set(r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+        by_book = {}
+        for e in agg.values():
+            by_book.setdefault(e['book'], set()).add(e['word'])
+        for book, words in by_book.items():
+            if book not in tables:
+                continue
+            wl = list(words)
+            for i in range(0, len(wl), 400):
+                chunk = wl[i:i + 400]
+                ph = ','.join('?' * len(chunk))
+                sql = ("SELECT headWord, tranCN, status, lastScore, daysBetweenReviews "
+                       "FROM [%s] WHERE headWord IN (%s)" % (book, ph))
+                for row in conn.execute(sql, chunk).fetchall():
+                    info[(book, (row[0] or '').strip().lower())] = row
+    except Exception:
+        info = {}
+
+    out = []
+    for e in agg.values():
+        row = info.get((e['book'], e['word'].strip().lower()))
+        e['inBook'] = row is not None
+        e['status'] = int(row[2] or 0) if row is not None else 0
+        e['lastScore'] = round(row[3] or 0, 2) if row is not None else 0
+        e['days'] = round(row[4] or 0, 1) if row is not None else 0
+        e['tranCN'] = (row[1] or '') if row is not None else ''
+        e['state'] = ('missing' if row is None else
+                      'new' if e['status'] == 0 else
+                      'learning' if e['status'] != 5 else 'known')
+        out.append(e)
+    out.sort(key=lambda x: x['lastAt'], reverse=True)   # 先按最近错
+    out.sort(key=lambda x: -x['times'])                 # 再按错次（稳定排序）
+    return {'words': out, 'total': total_wrong, 'distinct': len(out)}
+
+
 # ============================================================
 # 指标计算 — 页面 1（学习概览）
 # ============================================================
@@ -579,6 +654,8 @@ def main():
     try:
         studylog, global_config, counts, words, all_words, book_stats, current_book = read_all_data(conn)
         essay_logs = read_essay_logs(conn)  # 必须在 conn.Close() 之前读取
+        # 错词本（#117）：完形填空逐空答错的词，按词书回查现状（连接关掉就读不到了）
+        wrong_book = compute_wrong_words(essay_logs, conn)
     finally:
         conn.close()
 
@@ -594,11 +671,16 @@ def main():
     # current-scope variant (2026-10-18): academic page can toggle scope
     page2['currentScope'] = compute_page2(studylog, words)
 
+    print(f"   错词本: {wrong_book['distinct']} 个词 / 共错 {wrong_book['total']} 次 (" +
+          f"词库里有 {sum(1 for w in wrong_book['words'] if w['inBook'])} 个)")
+
     # 组装数据
     dashboard_data = {
         'page1': page1,
         'page2': page2,
         'essayLogs': essay_logs,
+        'wrongWords': wrong_book['words'],
+        'wrongTotal': wrong_book['total'],
         'meta': {
             'generatedAt': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'currentBook': current_book,

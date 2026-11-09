@@ -857,6 +857,37 @@ body::after {
 }
 .essay-head .essay-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
 
+/* 错词本（#117） */
+.wrong-book {
+  margin-bottom: 16px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 61, 100, 0.28);
+  background: linear-gradient(180deg, rgba(38, 14, 24, 0.72), rgba(14, 9, 18, 0.86));
+  padding: 14px 16px 12px;
+}
+.wrong-book-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.wrong-book-title { font-family: var(--font-display); font-size: 13px; letter-spacing: 2px; color: var(--neon-red); }
+.wrong-book-hint { font-size: 10.5px; color: var(--text-dim); }
+.wrong-book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+.wrong-word {
+  border: 1px solid rgba(255, 61, 100, 0.18);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  padding: 8px 10px;
+}
+.ww-word { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-primary); letter-spacing: 0.3px; }
+.ww-tran { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.ww-meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10px; color: var(--text-dim); margin-top: 5px; }
+.ww-times { color: var(--neon-red); font-weight: 600; }
+.ww-missing { color: var(--text-dim); }
+.ww-new { color: var(--neon-amber); }
+.ww-date { font-family: var(--font-mono); font-size: 9.5px; color: #4a4f74; margin-top: 4px; }
+.wrong-book-more {
+  margin-top: 10px; padding: 5px 12px; font-size: 11px; color: var(--text-secondary);
+  background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+}
+.wrong-book-more:hover { color: var(--neon-red); border-color: rgba(255, 61, 100, 0.5); }
+
 .essay-card {
   margin-bottom: 12px;
   border-radius: var(--radius);
@@ -2436,6 +2467,12 @@ const PageEssays = {
     const deleting = ref(false)
     const toastMsg = ref('')
     const toastType = ref('ok') // 'ok' | 'err'
+    // 错词本（#117）：默认只展示错得最多的 8 个
+    const showAllWrong = ref(false)
+    const visibleWrongWords = computed(() => {
+      const all = props.data?.wrongWords || []
+      return showAllWrong.value ? all : all.slice(0, 8)
+    })
     const showToast = (msg, type = 'ok') => {
       toastMsg.value = msg; toastType.value = type
       setTimeout(() => { toastMsg.value = '' }, 3000)
@@ -2586,6 +2623,7 @@ const PageEssays = {
     }
 
     return { expandedId, toggle, onEnter, onLeave, isEssayQ, isClozeQ, isCloze4Q, deleteEssay, deleting, toastMsg, toastType, copyEssayForAI,
+             showAllWrong, visibleWrongWords,
              answersOf, listedAnswers, pickedOf, isWrongPick, isRightPick, hasAnswers, wrongCount, verdictOf, verdictText }
   },
   template: `
@@ -2606,6 +2644,32 @@ const PageEssays = {
         <span class="chip">ESSAY LOG</span>
       </div>
     </header>
+    <!-- 错词本（#117）：完形填空逐空答错的词，已由程序自动降级 -->
+    <div v-if="data.wrongWords && data.wrongWords.length" class="wrong-book">
+      <div class="wrong-book-head">
+        <span class="wrong-book-title">📕 错词本</span>
+        <span class="chip">{{ data.wrongWords.length }} 个词 · 共错 {{ data.wrongTotal || 0 }} 次</span>
+        <span class="wrong-book-hint">完形填空里答错的词已自动降级（lastScore→0.6、复习间隔×0.5），会更快回到复习队列</span>
+      </div>
+      <div class="wrong-book-grid">
+        <div v-for="w in visibleWrongWords" :key="w.book + '|' + w.word" class="wrong-word">
+          <div class="ww-word">{{ w.word }}</div>
+          <div class="ww-tran" v-if="w.tranCN">{{ w.tranCN }}</div>
+          <div class="ww-meta">
+            <span class="ww-times">错 {{ w.times }} 次</span>
+            <span>{{ w.bookName }}</span>
+            <span v-if="w.state === 'known'">已掌握 · 评分 {{ w.lastScore }} · 间隔 {{ w.days }} 天</span>
+            <span v-else-if="w.state === 'learning'">学习中 · 评分 {{ w.lastScore }} · 间隔 {{ w.days }} 天</span>
+            <span v-else-if="w.state === 'new'" class="ww-new">新词 · 还没学过（未进复习队列，不降级）</span>
+            <span v-else class="ww-missing">这个词不在这本词书里</span>
+          </div>
+          <div class="ww-date">{{ w.lastAt }}</div>
+        </div>
+      </div>
+      <button v-if="data.wrongWords.length > 8" class="wrong-book-more" @click="showAllWrong = !showAllWrong">
+        {{ showAllWrong ? '收起' : '展开全部 ' + data.wrongWords.length + ' 个' }}
+      </button>
+    </div>
     <!-- Toast 通知 -->
     <div v-if="toastMsg" class="toast-notify" :class="{ 'toast-err': toastType === 'err' }">{{ toastMsg }}</div>
     <div v-for="(log, idx) in data.essayLogs" :key="log.id" class="essay-card" :class="{expanded: expandedId === log.id}">

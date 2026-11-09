@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 using System;
 using System.Collections.Generic;
 using System.Data.SQLite;
@@ -332,6 +332,258 @@ namespace ToastFish.Model.SqliteControl
                 }
             }
 
+        }
+
+        /// <summary>
+        /// 英语词书表名（跨词书共享掌握度用；不含 Goin / StdJp_Mid 两张日语表）—— #117
+        /// 唯一来源仍是 WordTables.English（#76），这里只做别名，别再手抄一份数组。
+        /// </summary>
+        public static readonly string[] ENGLISH_TABLES = WordTables.English;
+
+        private static readonly Dictionary<string, HashSet<string>> _columnCache =
+            new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 读某张词书表的列名。**不要假设所有词书表结构一致**：实测 16 张英语表里只有
+        /// CET4_1 / GRE_2 / KaoYan_3 有 dateLearingDue 列，其余 13 张是 28 列的老结构，
+        /// 直接 UPDATE dateLearingDue 会报「no such column」（#117 踩过）。
+        /// </summary>
+        private HashSet<string> TableColumns(string table)
+        {
+            HashSet<string> cols;
+            if (_columnCache.TryGetValue(table, out cols)) return cols;
+            cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using (var cmd = DataBase.CreateCommand())
+                {
+                    cmd.CommandText = $"PRAGMA table_info([{table}])";
+                    using (var dr = cmd.ExecuteReader())
+                        while (dr.Read())
+                            if (!dr.IsDBNull(1)) cols.Add(Convert.ToString(dr.GetValue(1)));
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"TableColumns({table}): {ex.Message}");
+            }
+            _columnCache[table] = cols;
+            return cols;
+        }
+
+        /// <summary>
+        /// 完形填空错词降级（#117）：lastScore←0.6、daysBetweenReviews×0.5、到期时间提前，
+        /// 让这个词在下一轮更早出现。刻意不动 dateLastReviewed（PostLearnApply 靠 dlr != bak
+        /// 判断本轮是否学过，改它会让词被当成「刚复习过」）。
+        /// 返回实际改动的行数。
+        /// </summary>
+        public int PenalizeWrongWords(ICollection<string> wrongWords, string table = null)
+        {
+            if (wrongWords == null || wrongWords.Count == 0) return 0;
+            string tbl = string.IsNullOrEmpty(table) ? TABLE_NAME : table;
+            if (Array.IndexOf(ENGLISH_TABLES, tbl) < 0) return 0;
+            int hit = 0;
+            foreach (var raw in wrongWords)
+            {
+                if (raw == null) continue;
+                string head = raw.Trim();
+                if (head.Length == 0) continue;
+                try
+                {
+                    bool exists = false;
+                    double oldDays = 0;
+                    int status = 0;
+                    using (var q = DataBase.CreateCommand())
+                    {
+                        q.CommandText = $"SELECT daysBetweenReviews, status FROM [{tbl}] WHERE headWord = @h LIMIT 1";
+                        q.Parameters.AddWithValue("@h", head);
+                        using (var dr = q.ExecuteReader())
+                        {
+                            if (dr.Read())
+                            {
+                                exists = true;
+                                if (!dr.IsDBNull(0))
+                                    double.TryParse(Convert.ToString(dr.GetValue(0), System.Globalization.CultureInfo.InvariantCulture),
+                                        System.Globalization.NumberStyles.Any,
+                                        System.Globalization.CultureInfo.InvariantCulture, out oldDays);
+                                if (!dr.IsDBNull(1)) int.TryParse(Convert.ToString(dr.GetValue(1)), out status);
+                            }
+                        }
+                    }
+                    // 还是新词（status=0）的词不参与调度，写 lastScore/到期时间没有意义，跳过
+                    if (!exists || status == 0) continue;
+
+                    double newDays = Math.Max(1.0, Math.Min(3650.0, oldDays * 0.5));
+                    string due;
+                    // 已掌握的词按「间隔减半」推算到期；还在 Step1/Step2 的词是按分钟排的，
+                    // 直接写 now+天 反而把它推后，改成立刻到期（对标 delayAgain）
+                    if (status == (int)Cardstatus.Reviewed)
+                        due = DateTime.Now.AddDays(newDays).ToString("yyyy/M/d H:m:s");
+                    else
+                        due = DateTime.Now.AddMinutes(Parameters.delayAgain).ToString("yyyy/M/d H:m:s");
+
+                    bool hasDue = TableColumns(tbl).Contains("dateLearingDue");
+                    using (var u = DataBase.CreateCommand())
+                    {
+                        u.CommandText = $"UPDATE [{tbl}] SET lastScore = 0.6, daysBetweenReviews = @d" +
+                                        (hasDue ? ", dateLearingDue = @due" : "") +
+                                        " WHERE headWord = @h";
+                        u.Parameters.AddWithValue("@d", newDays);
+                        if (hasDue) u.Parameters.AddWithValue("@due", due);
+                        u.Parameters.AddWithValue("@h", head);
+                        if (u.ExecuteNonQuery() > 0) hit++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"PenalizeWrongWords error for {head}: {ex.Message}");
+                }
+            }
+            return hit;
+        }
+
+        /// <summary>
+        /// 找出当前表里「还是新词（status=0）、但在其他英语词书里已经学过（status!=0）」的词（#117）。
+        /// 只比对 headWord，非英语词书直接返回空。
+        /// </summary>
+        public List<string> GetCrossBookLearnedWords(string table)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrEmpty(table)) return result;
+            if (Array.IndexOf(ENGLISH_TABLES, table) < 0) return result;
+
+            var learned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in ENGLISH_TABLES)
+            {
+                if (t == table) continue;
+                try
+                {
+                    using (var cmd = DataBase.CreateCommand())
+                    {
+                        cmd.CommandText = $"SELECT headWord FROM [{t}] WHERE status != 0";
+                        using (var dr = cmd.ExecuteReader())
+                            while (dr.Read())
+                                if (!dr.IsDBNull(0)) learned.Add(Convert.ToString(dr.GetValue(0)).Trim());
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"GetCrossBookLearnedWords({t}): {ex.Message}");
+                }
+            }
+            if (learned.Count == 0) return result;
+
+            try
+            {
+                using (var cmd = DataBase.CreateCommand())
+                {
+                    cmd.CommandText = $"SELECT headWord FROM [{table}] WHERE status = 0";
+                    using (var dr = cmd.ExecuteReader())
+                        while (dr.Read())
+                        {
+                            if (dr.IsDBNull(0)) continue;
+                            string h = Convert.ToString(dr.GetValue(0)).Trim();
+                            if (h.Length > 0 && learned.Contains(h)) result.Add(h);
+                        }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"GetCrossBookLearnedWords({table}): {ex.Message}");
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 把词标记为「已掌握」，SM2 参数从其他英语词书里最成熟的那条（daysBetweenReviews 最大）复制（#117）。
+        /// 本表已经学过的词（status!=0）跳过。返回实际标记数量。
+        /// </summary>
+        public int MarkWordsFromOtherBooks(IList<string> headWords, string table = null)
+        {
+            if (headWords == null || headWords.Count == 0) return 0;
+            string tbl = string.IsNullOrEmpty(table) ? TABLE_NAME : table;
+            if (Array.IndexOf(ENGLISH_TABLES, tbl) < 0) return 0;
+            int marked = 0;
+            foreach (var raw in headWords)
+            {
+                if (raw == null) continue;
+                string head = raw.Trim();
+                if (head.Length == 0) continue;
+                try
+                {
+                    double bestDays = -1;
+                    double sDiff = Parameters.diffcultyDefaultValue;
+                    double sDays = Parameters.daysBetweenReviewsDefaultValue;
+                    double sScore = 0.8;
+                    string sDlr = null, sDld = null;
+                    foreach (var t in ENGLISH_TABLES)
+                    {
+                        if (t == tbl) continue;
+                        try
+                        {
+                            bool srcHasDue = TableColumns(t).Contains("dateLearingDue");
+                            using (var cmd = DataBase.CreateCommand())
+                            {
+                                cmd.CommandText = $"SELECT difficulty, daysBetweenReviews, lastScore, dateLastReviewed" +
+                                                  (srcHasDue ? ", dateLearingDue" : ", NULL") +
+                                                  $" FROM [{t}] WHERE headWord = @h AND status != 0 " +
+                                                  $"ORDER BY daysBetweenReviews DESC LIMIT 1";
+                                cmd.Parameters.AddWithValue("@h", head);
+                                using (var dr = cmd.ExecuteReader())
+                                {
+                                    if (dr.Read())
+                                    {
+                                        double d = dr.IsDBNull(0) ? 0 : Convert.ToDouble(dr.GetValue(0));
+                                        double dd = dr.IsDBNull(1) ? 0 : Convert.ToDouble(dr.GetValue(1));
+                                        if (dd > bestDays)
+                                        {
+                                            bestDays = dd;
+                                            sDiff = d;
+                                            sDays = dd;
+                                            sScore = dr.IsDBNull(2) ? 0.8 : Convert.ToDouble(dr.GetValue(2));
+                                            sDlr = dr.IsDBNull(3) ? null : Convert.ToString(dr.GetValue(3));
+                                            sDld = dr.IsDBNull(4) ? null : Convert.ToString(dr.GetValue(4));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"MarkWordsFromOtherBooks({t}): {ex.Message}");
+                        }
+                    }
+                    if (bestDays < 0) continue;   // 别的词书也没学过
+
+                    // 源表可能没写过 dateLastReviewed（Step1/2 的词），此时按「刚复习过」处理，
+                    // 避免 status=5 但日期为空导致 Card 解析失败
+                    string dlr = string.IsNullOrEmpty(sDlr)
+                        ? DateTime.Now.ToString("yyyy/M/d H:m:s") : sDlr;
+                    string dld = string.IsNullOrEmpty(sDld) ? null : sDld;
+
+                    bool dstHasDue = TableColumns(tbl).Contains("dateLearingDue");
+                    using (var u = DataBase.CreateCommand())
+                    {
+                        u.CommandText = $"UPDATE [{tbl}] SET status = {(int)Cardstatus.Reviewed}, " +
+                                        $"difficulty = @diff, daysBetweenReviews = @days, lastScore = @ls, " +
+                                        $"dateLastReviewed = @dlr, dateLastReviewed_bak = @dlr" +
+                                        (dstHasDue ? $", dateLearingDue = {(dld == null ? "NULL" : "@dld")}" : "") +
+                                        $" WHERE headWord = @h AND status = 0";
+                        u.Parameters.AddWithValue("@diff", sDiff);
+                        u.Parameters.AddWithValue("@days", sDays);
+                        u.Parameters.AddWithValue("@ls", sScore);
+                        u.Parameters.AddWithValue("@dlr", dlr);
+                        if (dstHasDue && dld != null) u.Parameters.AddWithValue("@dld", dld);
+                        u.Parameters.AddWithValue("@h", head);
+                        if (u.ExecuteNonQuery() > 0) marked++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"MarkWordsFromOtherBooks error for {head}: {ex.Message}");
+                }
+            }
+            return marked;
         }
 
         public void GetOverdueReviewedCardList(int maxReviewedCardNumer, out List<Card> usedReviewedCardLst)

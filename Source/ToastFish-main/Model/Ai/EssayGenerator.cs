@@ -639,104 +639,67 @@ namespace ToastFish.Model.Ai
             return content;
         }
 
-        public static bool TryGenerate(List<string> words, string bookName, out EssayResult result, out string error)
+        /// <summary>解析器：把模型返回的文本转成结果对象（失败时 error 说明原因）。</summary>
+        private delegate bool JsonParser<T>(string content, out T result, out string error);
+
+        /// <summary>
+        /// 三个生成入口（短文 / 15选10 / 20空四选一）共用的请求骨架（#121）：
+        /// 读配置 → 拼请求 → 发一次 → 解析 → 推理模式失败时快速模式兜底 → 统一的异常文案。
+        /// 每个入口只有三处不同，全部以参数给出：快速/推理两份 system prompt、解析函数、成功后的收尾。
+        /// ⚠️ 收尾（修正轮 / 段落校验 / 记 LastSysPrompt）必须写在 afterParse 里，别在入口里另抄一份
+        ///    —— #116 的 LastSysPrompt 记错就是复制粘贴造成的。
+        /// </summary>
+        private static bool TryGenerateJson<T>(
+            string tag, List<string> words,
+            string fastPrompt, string reasonPrompt, int maxTokens,
+            JsonParser<T> parse, Func<T, bool, T> afterParse,
+            out T result, out string error)
         {
-            result = null; error = null;
+            result = default(T); error = null;
             LiveError = null;
             AiConfig.Load();
             if (string.IsNullOrEmpty(AiConfig.ApiKey)) { error = "未设置 API Key"; LiveError = error; return false; }
 
+            string userContent = string.Join(", ", words.ToArray());
+            bool reason = AiConfig.ModelMode == 1;
+
             try
             {
-                // 固定 system prompt + user 仅发单词表：
-                // 1) DeepSeek 对相同前缀自动命中上下文缓存（缓存输入价格约 1/10）
-                // 2) 每次请求的变动部分只有十几个 token
-                // response_format=json_object：API 层强制输出合法 JSON，消灭格式漂移
-                const string SYS_PROMPT =
-                    "用户给出英语单词列表。完成两件事：" +
-                    "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文（120~180词），" +
-                    "文体贴近{LEVEL}阅读：有具体细节、因果/转折等逻辑关系，避免流水账。" +
-                    "2)根据短文出3道{LEVEL}水准的英文阅读理解单选题，命题要求：" +
-                    "a.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
-                    "b.干扰项要有迷惑性——可用原文出现过的词但表述错误、偷换概念、张冠李戴或过度推断，禁止一眼排除的选项；" +
-                    "c.3题题型必须不同，从中选取：细节理解、推理判断(infer/imply/suggest)、主旨大意、词义猜测(the word \\\"X\\\" most likely means)、作者态度；" +
-                    "若出词义猜测题，被猜的词X必须是短文中出现但【不在用户给定单词列表内】的生僻词，禁止用给定单词；" +
-                    "d.每题4个选项（每个6~10个单词），只有1个正确，正确选项位置随机；4个选项长度必须严格均衡——单词数相同或仅相差1个，正确选项不得长于任何干扰项；为避免正确项天然偏长，正确选项要写得精炼，干扰项也必须写成结构完整的句子而非短语片段；任何选项明显偏长都会直接泄露答案，属于严重命题错误。" +
-                    "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\"," +
-                    "\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}" +
-                    "，answer是正确选项下标(0~3)。只输出JSON。";
-
-                // 推理模式专用 prompt：不限字数、自由发挥。命题要求与快速模式一致。
-                // 推理模式不发 response_format（thinking 下不保证支持）→ 显式禁止 markdown 包裹兜底。
-                const string SYS_PROMPT_REASON =
-                    "用户给出英语单词列表。完成两件事：" +
-                    "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文，不设字数限制，" +
-                    "篇幅按内容需要自由发挥、充分展开，不必刻意精简，" +
-                    "文体贴近{LEVEL}阅读：有具体细节、因果/转折等逻辑关系，内容有深度、值得一读，避免流水账。" +
-                    "2)根据短文出3道{LEVEL}水准的英文阅读理解单选题，命题要求：" +
-                    "a.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
-                    "b.干扰项要有迷惑性——可用原文出现过的词但表述错误、偷换概念、张冠李戴或过度推断，禁止一眼排除的选项；" +
-                    "c.3题题型必须不同，从中选取：细节理解、推理判断(infer/imply/suggest)、主旨大意、词义猜测(the word \\\"X\\\" most likely means)、作者态度；" +
-                    "若出词义猜测题，被猜的词X必须是短文中出现但【不在用户给定单词列表内】的生僻词，禁止用给定单词；" +
-                    "d.每题4个选项（每个6~10个单词），只有1个正确，正确选项位置随机；4个选项长度必须严格均衡——单词数相同或仅相差1个，正确选项不得长于任何干扰项；为避免正确项天然偏长，正确选项要写得精炼，干扰项也必须写成结构完整的句子而非短语片段；任何选项明显偏长都会直接泄露答案，属于严重命题错误。" +
-                    "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\"," +
-                    "\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}" +
-                    "，answer是正确选项下标(0~3)。只输出纯JSON文本，禁止用markdown代码块包裹。";
-
-                // 生成轮：system prompt 按当前词库难度动态化 + user 仅发单词表（同词库内命中上下文缓存）
-                string level = GetBookLevel(bookName);
-                // 考研英语与六级考查重点差异大，用专门的命题 prompt（2026-09-05）
-                bool kaoyan = !string.IsNullOrEmpty(bookName) && bookName.StartsWith("KaoYan");
-                string sysPrompt = kaoyan ? SYS_PROMPT_KAOYAN : SYS_PROMPT.Replace("{LEVEL}", level);
-                string sysPromptReason = kaoyan ? SYS_PROMPT_REASON_KAOYAN : SYS_PROMPT_REASON.Replace("{LEVEL}", level);
-                bool reason = AiConfig.ModelMode == 1;
-                int maxTokens = kaoyan ? 3200 : 1400;  // 考研 5 题 + 长难句拆解 + 英译汉，上调上限防截断
-                string body = BuildBody(reason ? sysPromptReason : sysPrompt,
-                    string.Join(", ", words.ToArray()), reason, maxTokens);
-
-                // 局部函数：推理模式失败（思考过长截断/解析失败）→ 快速模式兜底重试。
-                // 快速模式 thinking disabled + json_object，不会被思考挤占，成功率极高。
-                bool TryFastFallback(out EssayResult fb)
+                // 局部函数：推理模式失败（思考过长截断 / JSON 解析失败）→ 快速模式兜底重试一次。
+                bool TryFastFallback(out T fb)
                 {
-                    fb = null;
-                    string fbBody = BuildBody(sysPrompt, string.Join(", ", words.ToArray()), false, maxTokens);
+                    fb = default(T);
+                    string fbBody = BuildBody(fastPrompt, userContent, false, maxTokens);
                     string fbContent, fbError;
                     if (!PostChat(fbBody, false, out fbContent, out fbError)) return false;
-                    if (!ParseResult(fbContent, out fb, out fbError)) return false;
-                    ReviseEssay(words, bookName, ref fb);
+                    if (!parse(fbContent, out fb, out fbError)) return false;
+                    if (afterParse != null) fb = afterParse(fb, true);   // true = 用的是快速版 prompt
                     return true;
                 }
 
+                string body = BuildBody(reason ? reasonPrompt : fastPrompt, userContent, reason, maxTokens);
                 string content;
                 if (!PostChat(body, reason, out content, out error))
                 {
                     if (reason && TryFastFallback(out result)) return true;
+                    result = default(T);
                     return false;
                 }
-                if (!ParseResult(content, out result, out error))
+
+                T parsed;
+                string parseError;
+                if (!parse(content, out parsed, out parseError))
                 {
+                    error = parseError;
                     LiveError = error;
-                    LogFailedContent("ESSAY", words, content, error);
+                    LogFailedContent(tag, words, content, error);
                     if (reason && TryFastFallback(out result)) return true;
+                    result = default(T);
                     return false;
                 }
 
-                // 考研短文要求 4 段：模型偷懒写成一大段时，「in paragraph four」这类段引用必然错位，
-                // 带一条提示进修正轮，让短文真的分段（2026-11-03，用户截图：整篇一段却问 paragraph four）
-                if (kaoyan && CountParagraphs(result.EssayEN) < 4)
-                    result.QualityIssues.Add("短文只有 " + CountParagraphs(result.EssayEN)
-                        + " 段，考研短文必须分成 4 个自然段（段与段之间用空行分隔），请重写短文并保留原有词汇与题目数量");
-
-                // 修正轮：快速模式必跑；推理模式本身单轮，只有检出问题（引用词不存在 / 段落数不足）时才补一次修正
-                if (!reason || result.QualityIssues.Count > 0)
-                    ReviseEssay(words, bookName, ref result);
-
-                // 记住本轮"system + 单词表 + 生成结果"，评分时接着这段对话继续问，
-                // 既复用同一次上下文（遵循用户要求），也能命中服务端前缀缓存。
-                LastSysPrompt = sysPrompt;
-                LastUserContent = string.Join(", ", words.ToArray());
-                LastAssistantContent = SerializeEssay(result);
-
+                if (afterParse != null) parsed = afterParse(parsed, false);
+                result = parsed;
                 return true;
             }
             catch (WebException we)
@@ -746,13 +709,79 @@ namespace ToastFish.Model.Ai
                     error = HttpErrorDetail((int)r.StatusCode, ReadResponseBodySafely(we.Response));
                 else
                     error = "网络错误: " + we.Message;
-                LiveError = error; return false;
+                LiveError = error; result = default(T); return false;
             }
             catch (Exception e)
             {
                 error = e.Message;
-                LiveError = error; return false;
+                LiveError = error; result = default(T); return false;
             }
+        }
+
+        public static bool TryGenerate(List<string> words, string bookName, out EssayResult result, out string error)
+        {
+            const string SYS_PROMPT =
+                "用户给出英语单词列表。完成两件事：" +
+                "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文（120~180词），" +
+                "文体贴近{LEVEL}阅读：有具体细节、因果/转折等逻辑关系，避免流水账。" +
+                "2)根据短文出3道{LEVEL}水准的英文阅读理解单选题，命题要求：" +
+                "a.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
+                "b.干扰项要有迷惑性——可用原文出现过的词但表述错误、偷换概念、张冠李戴或过度推断，禁止一眼排除的选项；" +
+                "c.3题题型必须不同，从中选取：细节理解、推理判断(infer/imply/suggest)、主旨大意、词义猜测(the word \\\"X\\\" most likely means)、作者态度；" +
+                "若出词义猜测题，被猜的词X必须是短文中出现但【不在用户给定单词列表内】的生僻词，禁止用给定单词；" +
+                "d.每题4个选项（每个6~10个单词），只有1个正确，正确选项位置随机；4个选项长度必须严格均衡——单词数相同或仅相差1个，正确选项不得长于任何干扰项；为避免正确项天然偏长，正确选项要写得精炼，干扰项也必须写成结构完整的句子而非短语片段；任何选项明显偏长都会直接泄露答案，属于严重命题错误。" +
+                "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\"," +
+                "\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}" +
+                "，answer是正确选项下标(0~3)。只输出JSON。";
+
+            // 推理模式专用 prompt：不限字数、自由发挥。命题要求与快速模式一致。
+            // 推理模式不发 response_format（thinking 下不保证支持）→ 显式禁止 markdown 包裹兜底。
+            const string SYS_PROMPT_REASON =
+                "用户给出英语单词列表。完成两件事：" +
+                "1)用全部单词（允许屈折变化形式）写一篇自然连贯的英语短文，不设字数限制，" +
+                "篇幅按内容需要自由发挥、充分展开，不必刻意精简，" +
+                "文体贴近{LEVEL}阅读：有具体细节、因果/转折等逻辑关系，内容有深度、值得一读，避免流水账。" +
+                "2)根据短文出3道{LEVEL}水准的英文阅读理解单选题，命题要求：" +
+                "a.正确选项必须对原文同义替换或改写，禁止照抄原文词句；" +
+                "b.干扰项要有迷惑性——可用原文出现过的词但表述错误、偷换概念、张冠李戴或过度推断，禁止一眼排除的选项；" +
+                "c.3题题型必须不同，从中选取：细节理解、推理判断(infer/imply/suggest)、主旨大意、词义猜测(the word \\\"X\\\" most likely means)、作者态度；" +
+                "若出词义猜测题，被猜的词X必须是短文中出现但【不在用户给定单词列表内】的生僻词，禁止用给定单词；" +
+                "d.每题4个选项（每个6~10个单词），只有1个正确，正确选项位置随机；4个选项长度必须严格均衡——单词数相同或仅相差1个，正确选项不得长于任何干扰项；为避免正确项天然偏长，正确选项要写得精炼，干扰项也必须写成结构完整的句子而非短语片段；任何选项明显偏长都会直接泄露答案，属于严重命题错误。" +
+                "以JSON输出：{\"en\":\"英文短文\",\"cn\":\"短文的中文翻译\"," +
+                "\"questions\":[{\"q\":\"英文题目\",\"choices\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"answer\":0}]}" +
+                "，answer是正确选项下标(0~3)。只输出纯JSON文本，禁止用markdown代码块包裹。";
+
+            // 生成轮：system prompt 按当前词库难度动态化 + user 仅发单词表（同词库内命中上下文缓存）
+            string level = GetBookLevel(bookName);
+            // 考研英语与六级考查重点差异大，用专门的命题 prompt（2026-09-05）
+            bool kaoyan = !string.IsNullOrEmpty(bookName) && bookName.StartsWith("KaoYan");
+            string sysPrompt = kaoyan ? SYS_PROMPT_KAOYAN : SYS_PROMPT.Replace("{LEVEL}", level);
+            string sysPromptReason = kaoyan ? SYS_PROMPT_REASON_KAOYAN : SYS_PROMPT_REASON.Replace("{LEVEL}", level);
+            int maxTokens = kaoyan ? 3200 : 1400;  // 考研 5 题 + 长难句拆解 + 英译汉，上调上限防截断
+
+            return TryGenerateJson("ESSAY", words, sysPrompt, sysPromptReason, maxTokens,
+                ParseResult,
+                (r, usedFast) =>
+                {
+                    // 考研短文要求 4 段：模型偷懒写成一大段时，「in paragraph four」这类段引用必然错位，
+                    // 带一条提示进修正轮，让短文真的分段（2026-11-03，用户截图：整篇一段却问 paragraph four）
+                    if (kaoyan && CountParagraphs(r.EssayEN) < 4)
+                        r.QualityIssues.Add("短文只有 " + CountParagraphs(r.EssayEN)
+                            + " 段，考研短文必须分成 4 个自然段（段与段之间用空行分隔），请重写短文并保留原有词汇与题目数量");
+
+                    // 修正轮：快速模式必跑；推理模式本身单轮，只有检出问题（引用词不存在 / 段落数不足）时才补一次修正
+                    if (usedFast || AiConfig.ModelMode != 1 || r.QualityIssues.Count > 0)
+                        ReviseEssay(words, bookName, ref r);
+
+                    // 记住本轮"system + 单词表 + 生成结果"，评分时接着这段对话继续问，
+                    // 既复用同一次上下文（遵循用户要求），也能命中服务端前缀缓存。
+                    // 必须记真正发出去的那份（快速兜底时是快速版），否则评分拿到的是 3 题版 prompt — #116
+                    LastSysPrompt = (usedFast || AiConfig.ModelMode != 1) ? sysPrompt : sysPromptReason;
+                    LastUserContent = string.Join(", ", words.ToArray());
+                    LastAssistantContent = SerializeEssay(r);
+                    return r;
+                },
+                out result, out error);
         }
 
         /// <summary>
@@ -762,157 +791,109 @@ namespace ToastFish.Model.Ai
         /// </summary>
         public static bool TryGenerateCloze(List<string> words, string bookName, out ClozeResult result, out string error)
         {
-            result = null; error = null;
-            LiveError = null;
-            AiConfig.Load();
-            if (string.IsNullOrEmpty(AiConfig.ApiKey)) { error = "未设置 API Key"; LiveError = error; return false; }
+            // Prompt 设计要点：
+            // - 短文 150-200 词，含 10 个空
+            // - 至少 5 个空来自用户词表（用正确的屈折形式）
+            // - 15 候选 = 10 正 + 5 干扰
+            // - 干扰词要求：同词性、形近/语义相近、符合空位屈折要求
+            const string CLOZE_PROMPT =
+                "设计一道15选10选词填空题（类似四六级Banked Cloze）。" +
+                "用户给出一份单词列表，这是他们**刚刚学完的词，应当比较熟悉**。你需要写一篇短文，" +
+                "把这些词自然地融入文中，让用户在阅读时看到这些词、巩固记忆。" +
+                "" +
+                "★★★ 关键原则：挖空与否只看这个词在文中有没有辨析价值，不看它是否在用户列表里 ★★★" +
+                "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出10个最值得挖的实词即可。" +
+                "" +
+                "要求：" +
+                "1) 写一篇150~200词的英文短文（{LEVEL}阅读难度，有逻辑有细节）。" +
+                "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic）。" +
+                "把它们自然地融入，不要让它们显得突兀或堆砌。" +
+                "" +
+                "2) 从短文中选出**恰好10个实词**（名/动/形/副）挖空，用[1][2]...[10]依次标记。选词只看两点：" +
+                "a) 这个词在上下文中有推断空间——前后句的语义、逻辑连接、固定搭配能提供足够线索；" +
+                "b) 这个词有辨析价值——存在词性相同、但语义或固定搭配不同的替换词（可用来做干扰项，不要求是近义词）。不选专有名词、数字、冠词。" +
+                "" +
+                "★★★ 最重要规则：[N] 是替换符，它完全取代了原文中的一个词 ★★★" +
+                "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 candidates 数组的 word 字段里，正文 text 中绝不能出现任何答案词。" +
+                "错误写法（严禁，等于把答案亮出来）：...compelled me to [1] revise that assumption.（[1] 后紧跟答案 revise）" +
+                "正确写法：...compelled me to [1] that assumption.（revise 已从正文消失，只在 candidates 里）" +
+                "输出前请逐空自检：把正文里每个 [N] 后面紧跟的那个词删掉——若删掉后句子读不通或语义改变，说明你写错了，必须重写该空。" +
+                "" +
+                "3) 制作**恰好15个候选词**：10个正确答案（各空位在文中的确切屈折形式）+ 5个干扰词。" +
+                "★★★ 干扰词必须模仿四六级真题的干扰方式，而非近义词辨析 ★★★" +
+                "真题靠词性混淆、搭配不当、语义偏离制造干扰，让考生先按词性分组、再靠语义和固定搭配排除；严格近义词辨析在真题里只占极少数，且语境区分明显。" +
+                "干扰词设计标准（每条都必须满足）：" +
+                "a) 词性必须与某个空位相同（名/动/形/副匹配），使考生无法只靠词性直接排除；" +
+                "b) 优先用三种干扰方式之一：①搭配不当（动宾/介词/主谓搭配错误，语法通但英语母语者不会这么说）；②语义偏离（词性对、意思沾边但语境不符——情感色彩、程度、范围、对象错误）；③词形或词性易混（-ed/-ing 形容词、名词单复数、动词时态、形近词）；" +
+                "c) 严格近义词（如 examine/inspect、flaw/defect、precision/accuracy）做干扰项最多 1 个，且该近义词在语境中必须有明显区分（情感、语体、搭配对象不同）；" +
+                "d) **使用与空位一致的屈折形式**（如空位需过去式 adopted，干扰词也是过去式 adapted，不能是 adapt）；" +
+                "e) 5个干扰词各自瞄准**不同的**空位，分散干扰，不要扎堆攻击同一个空位；" +
+                "f) **严禁**将用户列表中的词作为干扰词——用户刚学过，一眼能排除，毫无迷惑性。" +
+                "" +
+                "4) 给出短文的中文翻译。★★★ 翻译中不要保留[1]...[10]这些占位符！★★★" +
+                "直接把挖空词对应的中文填入译文，使译文通顺完整、像正常中文段落一样。用户看翻译是为了理解短文含义，带洞的翻译没有意义。" +
+                "" +
+                "输出纯JSON，格式：" +
+                "{\"text\":\"短文含[1]...[10]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\"," +
+                "\"candidates\":[{\"word\":\"正确屈折形式\",\"blank\":1},...,{\"word\":\"正确屈折形式\",\"blank\":10},{\"word\":\"干扰词\",\"blank\":-1},...]}" +
+                "candidates必须恰好15项。blank=1~10为正确答案，-1为干扰词。只输出JSON。";
 
-            try
-            {
-                // Prompt 设计要点：
-                // - 短文 150-200 词，含 10 个空
-                // - 至少 5 个空来自用户词表（用正确的屈折形式）
-                // - 15 候选 = 10 正 + 5 干扰
-                // - 干扰词要求：同词性、形近/语义相近、符合空位屈折要求
-                const string CLOZE_PROMPT =
-                    "设计一道15选10选词填空题（类似四六级Banked Cloze）。" +
-                    "用户给出一份单词列表，这是他们**刚刚学完的词，应当比较熟悉**。你需要写一篇短文，" +
-                    "把这些词自然地融入文中，让用户在阅读时看到这些词、巩固记忆。" +
-                    "" +
-                    "★★★ 关键原则：挖空与否只看这个词在文中有没有辨析价值，不看它是否在用户列表里 ★★★" +
-                    "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出10个最值得挖的实词即可。" +
-                    "" +
-                    "要求：" +
-                    "1) 写一篇150~200词的英文短文（{LEVEL}阅读难度，有逻辑有细节）。" +
-                    "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic）。" +
-                    "把它们自然地融入，不要让它们显得突兀或堆砌。" +
-                    "" +
-                    "2) 从短文中选出**恰好10个实词**（名/动/形/副）挖空，用[1][2]...[10]依次标记。选词只看两点：" +
-                    "a) 这个词在上下文中有推断空间——前后句的语义、逻辑连接、固定搭配能提供足够线索；" +
-                    "b) 这个词有辨析价值——存在词性相同、但语义或固定搭配不同的替换词（可用来做干扰项，不要求是近义词）。不选专有名词、数字、冠词。" +
-                    "" +
-                    "★★★ 最重要规则：[N] 是替换符，它完全取代了原文中的一个词 ★★★" +
-                    "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 candidates 数组的 word 字段里，正文 text 中绝不能出现任何答案词。" +
-                    "错误写法（严禁，等于把答案亮出来）：...compelled me to [1] revise that assumption.（[1] 后紧跟答案 revise）" +
-                    "正确写法：...compelled me to [1] that assumption.（revise 已从正文消失，只在 candidates 里）" +
-                    "输出前请逐空自检：把正文里每个 [N] 后面紧跟的那个词删掉——若删掉后句子读不通或语义改变，说明你写错了，必须重写该空。" +
-                    "" +
-                    "3) 制作**恰好15个候选词**：10个正确答案（各空位在文中的确切屈折形式）+ 5个干扰词。" +
-                    "★★★ 干扰词必须模仿四六级真题的干扰方式，而非近义词辨析 ★★★" +
-                    "真题靠词性混淆、搭配不当、语义偏离制造干扰，让考生先按词性分组、再靠语义和固定搭配排除；严格近义词辨析在真题里只占极少数，且语境区分明显。" +
-                    "干扰词设计标准（每条都必须满足）：" +
-                    "a) 词性必须与某个空位相同（名/动/形/副匹配），使考生无法只靠词性直接排除；" +
-                    "b) 优先用三种干扰方式之一：①搭配不当（动宾/介词/主谓搭配错误，语法通但英语母语者不会这么说）；②语义偏离（词性对、意思沾边但语境不符——情感色彩、程度、范围、对象错误）；③词形或词性易混（-ed/-ing 形容词、名词单复数、动词时态、形近词）；" +
-                    "c) 严格近义词（如 examine/inspect、flaw/defect、precision/accuracy）做干扰项最多 1 个，且该近义词在语境中必须有明显区分（情感、语体、搭配对象不同）；" +
-                    "d) **使用与空位一致的屈折形式**（如空位需过去式 adopted，干扰词也是过去式 adapted，不能是 adapt）；" +
-                    "e) 5个干扰词各自瞄准**不同的**空位，分散干扰，不要扎堆攻击同一个空位；" +
-                    "f) **严禁**将用户列表中的词作为干扰词——用户刚学过，一眼能排除，毫无迷惑性。" +
-                    "" +
-                    "4) 给出短文的中文翻译。★★★ 翻译中不要保留[1]...[10]这些占位符！★★★" +
-                    "直接把挖空词对应的中文填入译文，使译文通顺完整、像正常中文段落一样。用户看翻译是为了理解短文含义，带洞的翻译没有意义。" +
-                    "" +
-                    "输出纯JSON，格式：" +
-                    "{\"text\":\"短文含[1]...[10]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\"," +
-                    "\"candidates\":[{\"word\":\"正确屈折形式\",\"blank\":1},...,{\"word\":\"正确屈折形式\",\"blank\":10},{\"word\":\"干扰词\",\"blank\":-1},...]}" +
-                    "candidates必须恰好15项。blank=1~10为正确答案，-1为干扰词。只输出JSON。";
+            const string CLOZE_PROMPT_REASON =
+                "设计一道15选10选词填空题（类似四六级Banked Cloze）。" +
+                "用户给出一份单词列表，这是他们**刚刚学完的词，应当比较熟悉**。你需要写一篇短文，" +
+                "把这些词自然地融入文中，让用户在阅读时看到这些词、巩固记忆。" +
+                "" +
+                "★★★ 关键原则：挖空与否只看这个词在文中有没有辨析价值，不看它是否在用户列表里 ★★★" +
+                "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出10个最值得挖的实词即可。" +
+                "" +
+                "要求：" +
+                "1) 写一篇英文短文（不设字数限制，按内容需要充分展开）。" +
+                "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic）。" +
+                "把它们自然地融入，不要让它们显得突兀或堆砌。短文有实质内容和思想深度，{LEVEL}以上阅读水平，值得一读。" +
+                "" +
+                "2) 从短文中选出**恰好10个实词**（名/动/形/副）挖空，用[1][2]...[10]依次标记。选词只看两点：" +
+                "a) 这个词在上下文中有推断空间——前后句的语义、逻辑连接、固定搭配能提供足够线索；" +
+                "b) 这个词有辨析价值——存在词性相同、但语义或固定搭配不同的替换词（可用来做干扰项，不要求是近义词）。不选专有名词、数字、冠词。" +
+                "" +
+                "★★★ 最重要规则：[N] 是替换符，它完全取代了原文中的一个词 ★★★" +
+                "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 candidates 数组的 word 字段里，正文 text 中绝不能出现任何答案词。" +
+                "错误写法（严禁，等于把答案亮出来）：...compelled me to [1] revise that assumption.（[1] 后紧跟答案 revise）" +
+                "正确写法：...compelled me to [1] that assumption.（revise 已从正文消失，只在 candidates 里）" +
+                "输出前请逐空自检：把正文里每个 [N] 后面紧跟的那个词删掉——若删掉后句子读不通或语义改变，说明你写错了，必须重写该空。" +
+                "" +
+                "3) 制作**恰好15个候选词**：10个正确答案（各空位在文中的确切屈折形式）+ 5个干扰词。" +
+                "★★★ 干扰词必须模仿四六级真题的干扰方式，而非近义词辨析 ★★★" +
+                "真题靠词性混淆、搭配不当、语义偏离制造干扰，让考生先按词性分组、再靠语义和固定搭配排除；严格近义词辨析在真题里只占极少数，且语境区分明显。" +
+                "干扰词设计标准（每条都必须满足）：" +
+                "a) 词性必须与某个空位相同（名/动/形/副匹配），使考生无法只靠词性直接排除；" +
+                "b) 优先用三种干扰方式之一：①搭配不当（动宾/介词/主谓搭配错误，语法通但英语母语者不会这么说）；②语义偏离（词性对、意思沾边但语境不符——情感色彩、程度、范围、对象错误）；③词形或词性易混（-ed/-ing 形容词、名词单复数、动词时态、形近词）；" +
+                "c) 严格近义词（如 examine/inspect、flaw/defect、precision/accuracy）做干扰项最多 1 个，且该近义词在语境中必须有明显区分（情感、语体、搭配对象不同）；" +
+                "d) **使用与空位一致的屈折形式**（如空位需过去式 adopted，干扰词也是过去式 adapted，不能是 adapt）；" +
+                "e) 5个干扰词各自瞄准**不同的**空位，分散干扰，不要扎堆攻击同一个空位；" +
+                "f) **严禁**将用户列表中的词作为干扰词——用户刚学过，一眼能排除，毫无迷惑性。" +
+                "" +
+                "4) 给出短文的中文翻译。★★★ 翻译中不要保留[1]...[10]这些占位符！★★★" +
+                "直接把挖空词对应的中文填入译文，使译文通顺完整、像正常中文段落一样。用户看翻译是为了理解短文含义，带洞的翻译没有意义。" +
+                "" +
+                "输出纯JSON文本，格式：" +
+                "{\"text\":\"短文含[1]...[10]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\"," +
+                "\"candidates\":[{\"word\":\"正确屈折形式\",\"blank\":1},...,{\"word\":\"正确屈折形式\",\"blank\":10},{\"word\":\"干扰词\",\"blank\":-1},...]}" +
+                "candidates必须恰好15项。blank=1~10为正确答案，-1为干扰词。" +
+                "只输出纯JSON，**禁止用markdown代码块包裹**。";
 
-                const string CLOZE_PROMPT_REASON =
-                    "设计一道15选10选词填空题（类似四六级Banked Cloze）。" +
-                    "用户给出一份单词列表，这是他们**刚刚学完的词，应当比较熟悉**。你需要写一篇短文，" +
-                    "把这些词自然地融入文中，让用户在阅读时看到这些词、巩固记忆。" +
-                    "" +
-                    "★★★ 关键原则：挖空与否只看这个词在文中有没有辨析价值，不看它是否在用户列表里 ★★★" +
-                    "不要刻意挖用户词、也不要刻意避开用户词。从短文本身出发，选出10个最值得挖的实词即可。" +
-                    "" +
-                    "要求：" +
-                    "1) 写一篇英文短文（不设字数限制，按内容需要充分展开）。" +
-                    "**必须**包含用户列表中的每一个词（允许屈折变化，如adopt→adopted；允许派生，如strategy→strategic）。" +
-                    "把它们自然地融入，不要让它们显得突兀或堆砌。短文有实质内容和思想深度，{LEVEL}以上阅读水平，值得一读。" +
-                    "" +
-                    "2) 从短文中选出**恰好10个实词**（名/动/形/副）挖空，用[1][2]...[10]依次标记。选词只看两点：" +
-                    "a) 这个词在上下文中有推断空间——前后句的语义、逻辑连接、固定搭配能提供足够线索；" +
-                    "b) 这个词有辨析价值——存在词性相同、但语义或固定搭配不同的替换词（可用来做干扰项，不要求是近义词）。不选专有名词、数字、冠词。" +
-                    "" +
-                    "★★★ 最重要规则：[N] 是替换符，它完全取代了原文中的一个词 ★★★" +
-                    "挖空后，该词的字母必须从正文 text 里彻底消失，只留下一个光秃秃的 [N]。答案词**只允许**出现在 candidates 数组的 word 字段里，正文 text 中绝不能出现任何答案词。" +
-                    "错误写法（严禁，等于把答案亮出来）：...compelled me to [1] revise that assumption.（[1] 后紧跟答案 revise）" +
-                    "正确写法：...compelled me to [1] that assumption.（revise 已从正文消失，只在 candidates 里）" +
-                    "输出前请逐空自检：把正文里每个 [N] 后面紧跟的那个词删掉——若删掉后句子读不通或语义改变，说明你写错了，必须重写该空。" +
-                    "" +
-                    "3) 制作**恰好15个候选词**：10个正确答案（各空位在文中的确切屈折形式）+ 5个干扰词。" +
-                    "★★★ 干扰词必须模仿四六级真题的干扰方式，而非近义词辨析 ★★★" +
-                    "真题靠词性混淆、搭配不当、语义偏离制造干扰，让考生先按词性分组、再靠语义和固定搭配排除；严格近义词辨析在真题里只占极少数，且语境区分明显。" +
-                    "干扰词设计标准（每条都必须满足）：" +
-                    "a) 词性必须与某个空位相同（名/动/形/副匹配），使考生无法只靠词性直接排除；" +
-                    "b) 优先用三种干扰方式之一：①搭配不当（动宾/介词/主谓搭配错误，语法通但英语母语者不会这么说）；②语义偏离（词性对、意思沾边但语境不符——情感色彩、程度、范围、对象错误）；③词形或词性易混（-ed/-ing 形容词、名词单复数、动词时态、形近词）；" +
-                    "c) 严格近义词（如 examine/inspect、flaw/defect、precision/accuracy）做干扰项最多 1 个，且该近义词在语境中必须有明显区分（情感、语体、搭配对象不同）；" +
-                    "d) **使用与空位一致的屈折形式**（如空位需过去式 adopted，干扰词也是过去式 adapted，不能是 adapt）；" +
-                    "e) 5个干扰词各自瞄准**不同的**空位，分散干扰，不要扎堆攻击同一个空位；" +
-                    "f) **严禁**将用户列表中的词作为干扰词——用户刚学过，一眼能排除，毫无迷惑性。" +
-                    "" +
-                    "4) 给出短文的中文翻译。★★★ 翻译中不要保留[1]...[10]这些占位符！★★★" +
-                    "直接把挖空词对应的中文填入译文，使译文通顺完整、像正常中文段落一样。用户看翻译是为了理解短文含义，带洞的翻译没有意义。" +
-                    "" +
-                    "输出纯JSON文本，格式：" +
-                    "{\"text\":\"短文含[1]...[10]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\"," +
-                    "\"candidates\":[{\"word\":\"正确屈折形式\",\"blank\":1},...,{\"word\":\"正确屈折形式\",\"blank\":10},{\"word\":\"干扰词\",\"blank\":-1},...]}" +
-                    "candidates必须恰好15项。blank=1~10为正确答案，-1为干扰词。" +
-                    "只输出纯JSON，**禁止用markdown代码块包裹**。";
-
-                // 生成轮：15选10 仅用于非考研词库（考研词库走 TryGenerateCloze4Choice 的 20空四选一）
-                string level = GetBookLevel(bookName);
-                string clozePrompt = CLOZE_PROMPT.Replace("{LEVEL}", level);
-                string clozePromptReason = CLOZE_PROMPT_REASON.Replace("{LEVEL}", level);
-                bool reason = AiConfig.ModelMode == 1;
-                string body = BuildBody(reason ? clozePromptReason : clozePrompt,
-                    string.Join(", ", words.ToArray()), reason, 2000);
-
-                // 局部函数：推理模式失败 → 快速模式兜底重试（thinking disabled 不会被思考挤占）。
-                bool TryFastFallback(out ClozeResult fb)
+            // 生成轮：15选10 仅用于非考研词库（考研词库走 TryGenerateCloze4Choice 的 20空四选一）
+            string level = GetBookLevel(bookName);
+            return TryGenerateJson("CLOZE", words,
+                CLOZE_PROMPT.Replace("{LEVEL}", level), CLOZE_PROMPT_REASON.Replace("{LEVEL}", level), 2000,
+                ParseClozeResult,
+                (r, usedFast) =>
                 {
-                    fb = null;
-                    string fbBody = BuildBody(clozePrompt, string.Join(", ", words.ToArray()), false, 2000);
-                    string fbContent, fbError;
-                    if (!PostChat(fbBody, false, out fbContent, out fbError)) return false;
-                    if (!ParseClozeResult(fbContent, out fb, out fbError)) return false;
-                    ReviseCloze(words, bookName, ref fb);
-                    return true;
-                }
-
-                string content;
-                if (!PostChat(body, reason, out content, out error))
-                {
-                    if (reason && TryFastFallback(out result)) return true;
-                    return false;
-                }
-                if (!ParseClozeResult(content, out result, out error))
-                {
-                    LiveError = error;
-                    LogFailedContent("CLOZE", words, content, error);
-                    if (reason && TryFastFallback(out result)) return true;
-                    return false;
-                }
-
-                // 修正轮：仅快速模式（推理模式保持单轮）
-                if (!reason)
-                    ReviseCloze(words, bookName, ref result);
-
-                return true;
-            }
-            catch (WebException we)
-            {
-                var r = we.Response as HttpWebResponse;
-                if (r != null)
-                    error = HttpErrorDetail((int)r.StatusCode, ReadResponseBodySafely(we.Response));
-                else
-                    error = "网络错误: " + we.Message;
-                LiveError = error; return false;
-            }
-            catch (Exception e)
-            {
-                error = e.Message;
-                LiveError = error; return false;
-            }
+                    // 修正轮：仅快速模式（推理模式保持单轮）；快速兜底也按快速模式处理
+                    if (usedFast || AiConfig.ModelMode != 1)
+                        ReviseCloze(words, bookName, ref r);
+                    return r;
+                },
+                out result, out error);
         }
 
         // ===== 多轮自检生成辅助方法（2026-08-08）=====
@@ -1206,58 +1187,10 @@ namespace ToastFish.Model.Ai
         /// </summary>
         public static bool TryGenerateCloze4Choice(List<string> words, out Cloze4Result result, out string error)
         {
-            result = null; error = null;
-            LiveError = null;
-            AiConfig.Load();
-            if (string.IsNullOrEmpty(AiConfig.ApiKey)) { error = "未设置 API Key"; LiveError = error; return false; }
-
-            try
-            {
-                bool reason = AiConfig.ModelMode == 1;
-                string body = BuildBody(reason ? CLOZE_PROMPT_REASON_KAOYAN : CLOZE_PROMPT_KAOYAN,
-                    string.Join(", ", words.ToArray()), reason, 2000);
-
-                // 局部函数：推理模式失败（思考过长截断/解析失败）→ 快速模式兜底重试。
-                bool TryFastFallback(out Cloze4Result fb)
-                {
-                    fb = null;
-                    string fbBody = BuildBody(CLOZE_PROMPT_KAOYAN, string.Join(", ", words.ToArray()), false, 2000);
-                    string fbContent, fbError;
-                    if (!PostChat(fbBody, false, out fbContent, out fbError)) return false;
-                    if (!ParseCloze4ChoiceResult(fbContent, out fb, out fbError)) return false;
-                    return true;
-                }
-
-                string content;
-                if (!PostChat(body, reason, out content, out error))
-                {
-                    if (reason && TryFastFallback(out result)) return true;
-                    return false;
-                }
-                if (!ParseCloze4ChoiceResult(content, out result, out error))
-                {
-                    LiveError = error;
-                    LogFailedContent("CLOZE4", words, content, error);
-                    if (reason && TryFastFallback(out result)) return true;
-                    return false;
-                }
-
-                return true;
-            }
-            catch (WebException we)
-            {
-                var r = we.Response as HttpWebResponse;
-                if (r != null)
-                    error = HttpErrorDetail((int)r.StatusCode, ReadResponseBodySafely(we.Response));
-                else
-                    error = "网络错误: " + we.Message;
-                LiveError = error; return false;
-            }
-            catch (Exception e)
-            {
-                error = e.Message;
-                LiveError = error; return false;
-            }
+            // 20空四选一：prompt 是类级 const（文件顶部），这里只走公共骨架
+            return TryGenerateJson("CLOZE4", words,
+                CLOZE_PROMPT_KAOYAN, CLOZE_PROMPT_REASON_KAOYAN, 2000,
+                ParseCloze4ChoiceResult, null, out result, out error);
         }
 
         /// <summary>解析 20空四选一 JSON 结果（考研英语完形填空）。</summary>

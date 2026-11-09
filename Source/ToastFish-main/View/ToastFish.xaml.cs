@@ -924,6 +924,8 @@ namespace ToastFish
             Select.TABLE_NAME = TempName;
             Se.UpdateBookName(TempName);
             Se.UpdateTableCount();
+            // 切库后提示「这些词你在别的词书学过」，选是则共享掌握度（#117）
+            OfferCrossBookProgress(TempName);
             //if (sender.ToString() == "顺序五十音")
             //{
             //     int Progress = Se.GetGoinProgress();
@@ -934,6 +936,51 @@ namespace ToastFish
             List<int> res = Se.SelectCount();
                 pushWords.PushMessage("当前词库：" + sender.ToString() + "\n当前进度：" + res[0].ToString() + "/" + res[1].ToString());
            // }
+        }
+
+        /// <summary>
+        /// 切换词书后，若本表还有词在别的英语词书里已学过，提示是否共享掌握度（#117）。
+        /// 只做提示，不自动改数据；选「标记为已会」才把 SM2 参数从源表复制过来。
+        /// </summary>
+        private async void OfferCrossBookProgress(string table)
+        {
+            try
+            {
+                if (PushWords.TestMode) return;
+                if (table != "Goin" && table != "StdJp_Mid")
+                {
+                    List<string> words = await System.Threading.Tasks.Task.Run(() =>
+                    {
+                        using (var sel = new Select()) return sel.GetCrossBookLearnedWords(table);
+                    });
+                    // 少于 10 个不值得打扰（零星重叠多半是同一词的变体）
+                    if (words == null || words.Count < 10) return;
+
+                    // #119：timeoutMs = 0 → 弹窗永久停留，直到用户点「标记为已会」或「先不用」。
+                    // 旧版给 60000，60 秒后自己消失（返回 -1），用户会以为提示被吞了。
+                    int choice = await NotificationForm.ShowWithButtons(
+                        "跨词书进度",
+                        "这本词书里有 " + words.Count + " 个词你在其他词书已经学过，要标记为已掌握吗？标了就不必重学一遍。",
+                        new string[] { "标记为已会", "先不用" },
+                        0);
+                    if (choice != 0) return;
+
+                    int marked = await System.Threading.Tasks.Task.Run(() =>
+                    {
+                        using (var sel = new Select()) return sel.MarkWordsFromOtherBooks(words);
+                    });
+                    Se.SyncCountTable();
+                    Se.UpdateTableCount();
+                    List<int> res2 = Se.SelectCount();
+                    ToastBridge.ShowMessage("ToastFish", "已标记 " + marked + " 个词为已掌握", 4000);
+                    pushWords.PushMessage("当前词库：" + TablelDictionary[table] +
+                        "\n当前进度：" + res2[0].ToString() + "/" + res2[1].ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("OfferCrossBookProgress: " + ex.Message);
+            }
         }
 
         private void RandomWordTest_Click(object sender, EventArgs e)

@@ -87,6 +87,19 @@ namespace ToastFish.Model.PushControl
             return true;
         }
 
+        // === 答题节奏（#123 / 3.4.8）===
+        // 旧实现里「答错」的提示条显示 3 秒（填空题 5 秒），循环却接着睡 5 秒（填空题 6 秒）：
+        // 提示条先消失，屏幕上空等 2~3 秒才出下一题，看起来像卡住了。
+        // 现在提示条显示多久就只等多久 —— 下一题正好接在提示条消失的那一刻出现。
+        /// <summary>三选一答错时，「错误 正确答案：…」提示条显示时长（也是到下一题的等待时长）。</summary>
+        private const int WRONG_MSG_MS = 2800;
+        /// <summary>四选一填空题答错时，带例句解释的提示条显示时长。</summary>
+        private const int FILL_WRONG_MSG_MS = 4200;
+        /// <summary>每道题弹出前的极短停顿（只为了让上一帧窗口彻底消失，不再有 0.5 秒空档）。</summary>
+        private const int QUIZ_GAP_MS = 120;
+        /// <summary>答对后到下一题的停顿。</summary>
+        private const int QUIZ_RIGHT_GAP_MS = 200;
+
         // === AI 短文累积门控（2026-09-16 新增，见 CLAUDE.md #67）===
         /// <summary>累计多少新词才生成一次 AI 短文/完形填空（此前每轮都生成，频率过高）。</summary>
         private const int ESSAY_MIN_NEW_WORDS = 30;
@@ -562,7 +575,7 @@ namespace ToastFish.Model.PushControl
             bool seenPopup = false;
             while (true)
             {
-                Tcs.Task.Wait(120);
+                Tcs.Task.Wait(60);   // #123：轮询间隔减半，按键后到下一题少 0~60ms 死等
                 if (Tcs.Task.IsCompleted) return Tcs.Task.Result;
                 if (RoundAbort) return strandedValue;
                 if (NotificationForm.HasAnyLivePopup) seenPopup = true;
@@ -1392,7 +1405,7 @@ namespace ToastFish.Model.PushControl
             while (TestList.Count != 0)
             {
                 // // History.Clear()
-                Thread.Sleep(500);
+                Thread.Sleep(QUIZ_GAP_MS);
                 CurrentWord = GetRandomWord(TestList);
                 // #107：随机测试的干扰项也不能和目标词同义
                 List<Word> FakeWordList = GetTransQuestionDistractors(CurrentWord, (List<Word>)Query.AllWordList, 2);
@@ -1419,7 +1432,7 @@ namespace ToastFish.Model.PushControl
                 if (QUESTION_CURRENT_STATUS == 1)
                 {
                     TestList.Remove(CurrentWord);
-                    Thread.Sleep(500);
+                    Thread.Sleep(QUIZ_RIGHT_GAP_MS);
                 }
                 else if (QUESTION_CURRENT_STATUS == 0)
                 {
@@ -1538,7 +1551,7 @@ namespace ToastFish.Model.PushControl
             while (CopyList.Count != 0)
             {
                 // // History.Clear()
-                Thread.Sleep(500);
+                Thread.Sleep(QUIZ_GAP_MS);   // #123：原来每题先干等 0.5 秒
                 CurrentWord = CopyList[0];
                 List<Word> rndWords;
                 if (RandomList.Count >= 10)
@@ -1557,15 +1570,16 @@ namespace ToastFish.Model.PushControl
                 if (result)
                 {
                     CopyList.RemoveAt(0);
-                    Thread.Sleep(500);
+                    Thread.Sleep(QUIZ_RIGHT_GAP_MS);
                 }
                 else
                 {
                     //CopyList.Remove(CurrentWord);
-                    ToastBridge.ShowMessage("ToastFish", "错误 正确答案：" + AnswerDict[QUESTION_CURRENT_RIGHT_ANSWER.ToString()] + '.' + CurrentWord.headWord, 3000);
+                    // #123：提示条时长与等待时长必须一致，否则提示消失后会出现 2~3 秒空白
+                    ToastBridge.ShowMessage("ToastFish", "错误 正确答案：" + AnswerDict[QUESTION_CURRENT_RIGHT_ANSWER.ToString()] + '.' + CurrentWord.headWord, WRONG_MSG_MS);
                     CopyList.RemoveAt(0);
                     CopyList.Add(CurrentWord);
-                    Thread.Sleep(5000);
+                    Thread.Sleep(WRONG_MSG_MS);
                 }
             }
             //填空题
@@ -1584,7 +1598,8 @@ namespace ToastFish.Model.PushControl
                 //CurrentWord = GetRandomWord(CopyList);
                 CurrentWord = CopyList[0];
                 QUESTION_CURRENT_RIGHT_ANSWER = int.Parse(CurrentWord.rightIndex) - 1;
-                PushOneQuestion(CurrentWord);
+                // #123：这里原本还调了一次 PushOneQuestion，而 PushWaitFillQuestion 内部又调一次，
+                // 等于同一道题连推两个弹窗（第一个刚显示就被下一个顶掉，肉眼看到闪一下）。
                 bool isFinished = PushWaitFillQuestion(CurrentWord);
 
                 if (isFinished)
@@ -1599,8 +1614,9 @@ namespace ToastFish.Model.PushControl
                     string explainText = "错误, 正确答案：" + AnswerDict[QUESTION_CURRENT_RIGHT_ANSWER.ToString()];
                     if (!string.IsNullOrEmpty(CurrentWord.explain))
                         explainText += "\n" + CurrentWord.explain;
-                    ToastBridge.ShowMessage("ToastFish", explainText, 5000);
-                    Thread.Sleep(6000);
+                    // #123：同样是「提示条显示多久就等多久」（原来 5 秒 + 睡 6 秒）
+                    ToastBridge.ShowMessage("ToastFish", explainText, FILL_WRONG_MSG_MS);
+                    Thread.Sleep(FILL_WRONG_MSG_MS);
                     CopyList.RemoveAt(0);
                     CopyList.Add(CurrentWord);
                 }
@@ -1867,7 +1883,7 @@ namespace ToastFish.Model.PushControl
                                 int correct = cloze4Result & 0xFFFF;
                                 if (attempted > 0)
                                 {
-                                    ApplyEssaySM2Feedback(cloze4Words, finishedCards, attempted, correct);
+                                    ApplyClozeSM2Feedback(cloze4Words, finishedCards, attempted, correct, cloze4AnswersJson);
                                     SaveCloze4Log(cloze4Words, cloze4, attempted, correct, cloze4AnswersJson);
                                 }
                             }
@@ -1991,7 +2007,7 @@ namespace ToastFish.Model.PushControl
 
                             if (attempted > 0)
                             {
-                                ApplyEssaySM2Feedback(clozeWords, finishedCards, attempted, correct);
+                                ApplyClozeSM2Feedback(clozeWords, finishedCards, attempted, correct, clozeAnswersJson);
                                 SaveClozeLog(clozeWords, cloze, attempted, correct, clozeAnswersJson);
                             }
                         }
@@ -2219,6 +2235,115 @@ namespace ToastFish.Model.PushControl
             else
                 ToastBridge.ShowMessage("ToastFish", "阅读完成 — 没关系，这轮较难，单词复习节奏已自动调整", 4000);
             Thread.Sleep(1500);
+        }
+
+        /// <summary>
+        /// 完形填空逐空反馈（#117）：错词直接降级（lastScore←0.6、间隔×0.5、提前到期），
+        /// 答对的词给一次小幅提升；没有逐空数据（老记录）时回退到整篇统一分。
+        /// 阅读理解不做词级归因，仍走 ApplyEssaySM2Feedback。
+        /// </summary>
+        private static void ApplyClozeSM2Feedback(List<Word> clozeWords, List<Card> finishedCards,
+            int attempted, int correct, string answersJson)
+        {
+            if (TestMode) return;
+            HashSet<string> wrong, right;
+            CollectClozeAnswers(answersJson, out wrong, out right);
+            if (wrong.Count == 0 && right.Count == 0)
+            {
+                ApplyEssaySM2Feedback(clozeWords, finishedCards, attempted, correct);
+                return;
+            }
+
+            var cardMap = new Dictionary<int, Card>();
+            if (finishedCards != null)
+            {
+                foreach (var c in finishedCards)
+                    if (!cardMap.ContainsKey(c.word.wordRank))
+                        cardMap[c.word.wordRank] = c;
+            }
+
+            List<Card> updatedCards = new List<Card>();
+            if (clozeWords != null)
+            {
+                foreach (var w in clozeWords)
+                {
+                    string head = (w.headWord ?? "").Trim();
+                    // 只给答对的词加分；答错的词交给 PenalizeWrongWords 直接降级，避免同一个词被两套规则拉扯
+                    if (head.Length == 0 || !right.Contains(head)) continue;
+                    double diff = cardMap.ContainsKey(w.wordRank)
+                        ? Math.Max(0.01, Math.Min(0.99, cardMap[w.wordRank].difficulty))
+                        : Math.Max(0.01, Math.Min(0.99, w.difficulty));
+                    double sc = EssayGoodScore(diff);
+                    Card c2 = new Card(w); c2.updateCard(sc); updatedCards.Add(c2);
+                }
+            }
+
+            Select updateSelect = new Select();
+            updateSelect.SelectWordList();
+            if (updatedCards.Count > 0) updateSelect.updateCardDateBase(updatedCards);
+            int penalized = updateSelect.PenalizeWrongWords(wrong);
+            updateSelect.SyncCountTable();
+
+            string msg = "完形填空 " + correct + "/" + attempted;
+            if (penalized > 0)
+                msg += " — " + penalized + " 个错词已降级，下一轮会更早出现";
+            ToastBridge.ShowMessage("ToastFish", msg, 4000);
+            Thread.Sleep(1500);
+        }
+
+        /// <summary>
+        /// 从逐空作答 JSON 里取出错词与答对的词（#117）。
+        /// 格式：[{"i":1,"pick":"as","ans":"than","ok":false}]，ans 是该空的正确词。
+        /// 同一个词在多个空出现时：只要错过一次就算错。
+        /// </summary>
+        private static void CollectClozeAnswers(string answersJson,
+            out HashSet<string> wrong, out HashSet<string> right)
+        {
+            wrong = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            right = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(answersJson)) return;
+            string txt = answersJson.Trim();
+            if (txt == "[]" || txt.Length < 2) return;
+            try
+            {
+                var ser = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var arr = ser.Deserialize<object[]>(txt);
+                if (arr == null) return;
+                foreach (var o in arr)
+                {
+                    var d = o as Dictionary<string, object>;
+                    if (d == null) continue;
+                    object ansObj;
+                    if (!d.TryGetValue("ans", out ansObj) || ansObj == null) continue;
+                    // 阅读理解的 answers 里 ans 是选项下标（int），没有词级信息，直接跳过；
+                    // 只有完形填空才是单词字符串
+                    if (!(ansObj is string)) continue;
+                    string ans = ((string)ansObj).Trim();
+                    if (ans.Length == 0) continue;
+                    bool ok = false;
+                    object okObj;
+                    if (d.TryGetValue("ok", out okObj) && okObj != null)
+                    {
+                        bool b;
+                        if (bool.TryParse(Convert.ToString(okObj), out b)) ok = b;
+                    }
+                    if (ok) right.Add(ans); else wrong.Add(ans);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("CollectClozeAnswers: " + ex.Message);
+            }
+            right.ExceptWith(wrong);
+        }
+
+        /// <summary>
+        /// 答对时的掌握度加分（与 ApplyEssaySM2Feedback 的 isGood 分支同一套 Sigmoid，2026-07-21）。
+        /// </summary>
+        private static double EssayGoodScore(double diff)
+        {
+            double s = Sigmoid((diff - 0.25) * 10.0);
+            return Math.Max(0.4, Math.Min(1.0, 0.77 + s * 0.18));
         }
 
         /// <summary>
