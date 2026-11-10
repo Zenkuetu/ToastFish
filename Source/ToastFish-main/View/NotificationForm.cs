@@ -168,6 +168,92 @@ namespace ToastFish.View
                 TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
         }
 
+        /// <summary>
+        /// #130 词组的插入格式是「义项1; 义项2; 义项3」（中英标点都算），这里按分隔符拆成多条，
+        /// 让每个义项各占一行 —— 以前整串丢给 Label，只会按宽度随便折行，义项边界看不出来。
+        /// #131 两条保护：① 括号里的分号不拆（如「西方国家（western 西方；country 的复数形式）；西域」）；
+        /// ② 拆出超过 8 条视为脏数据，整串原样显示，免得把弹窗撑爆。
+        /// </summary>
+        private static string[] SplitItems(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return new string[0];
+            var list = new List<string>();
+            var sb = new StringBuilder();
+            int depth = 0;
+            foreach (char c in text)
+            {
+                if (c == '(' || c == '（' || c == '[' || c == '【' || c == '{' || c == '「' || c == '《')
+                {
+                    depth++;
+                    sb.Append(c);
+                    continue;
+                }
+                if (c == ')' || c == '）' || c == ']' || c == '】' || c == '}' || c == '」' || c == '》')
+                {
+                    if (depth > 0) depth--;
+                    sb.Append(c);
+                    continue;
+                }
+                if (depth == 0 && (c == ';' || c == '；' || c == '\n' || c == '\r'))
+                {
+                    string t = sb.ToString().Trim();
+                    if (t.Length > 0) list.Add(t);
+                    sb.Length = 0;
+                    continue;
+                }
+                sb.Append(c);
+            }
+            string last = sb.ToString().Trim();
+            if (last.Length > 0) list.Add(last);
+
+            if (list.Count > 8) return new string[] { text.Trim() };
+            return list.ToArray();
+        }
+
+        /// <summary>
+        /// #131 词组块的显示行：英文义项与它的中文翻译**逐条配对**（英-中-英-中），
+        /// 以前是「英文一个 Label、中文一个 Label」，先画完全部英文再画全部中文，读起来要来回对位。
+        /// 两边条数一致才配对；不一致时退回「英文全列 + 中文全列」。只有一条义项时中文不缩进，保持旧观感。
+        /// </summary>
+        private static List<KeyValuePair<string, bool>> PhraseRows(string phrase, string phraseCN)
+        {
+            var rows = new List<KeyValuePair<string, bool>>();   // Value=true 表示中文行
+            var en = SplitItems(phrase);
+            if (en.Length == 0) return rows;
+            var cn = SplitItems(phraseCN);
+            bool pair = cn.Length == en.Length;
+            string cnPad = en.Length > 1 ? "   " : "";
+
+            for (int i = 0; i < en.Length; i++)
+                rows.Add(new KeyValuePair<string, bool>((i == 0 ? "◆ " : "   ") + en[i], false));
+
+            if (pair)
+            {
+                // 每条英文后面紧跟它的中文（插入到对应位置）
+                for (int i = 0; i < cn.Length; i++)
+                {
+                    if (cn[i].Length == 0) continue;
+                    rows.Insert(i * 2 + 1, new KeyValuePair<string, bool>(cnPad + cn[i], true));
+                }
+            }
+            else
+            {
+                for (int i = 0; i < cn.Length; i++)
+                    rows.Add(new KeyValuePair<string, bool>(cnPad + cn[i], true));
+            }
+            return rows;
+        }
+
+        /// <summary>#131 词组块总高：逐行量高 + 行间 2px（末尾不留空）</summary>
+        private static int MeasurePhraseRows(List<KeyValuePair<string, bool>> rows, int width)
+        {
+            if (rows == null || rows.Count == 0) return 0;
+            int h = 0;
+            foreach (var row in rows)
+                h += MeasureH(row.Key, row.Value ? FONT_EXCN : FONT_EX, width) + 2;
+            return h - 2;
+        }
+
         /// <summary>当前屏幕工作区（非 DPI-aware 下与所有测量同处一个逻辑像素坐标系，125%/150% 比例自洽）</summary>
         private static Rectangle ScreenArea() => Screen.PrimaryScreen.WorkingArea;
 
@@ -241,8 +327,8 @@ namespace ToastFish.View
                 int hPos    = MeasureH(posTran, FONT_POS, cw);
                 int hSent   = string.IsNullOrEmpty(sentence) ? 0 : MeasureH("「" + sentence + "」", FONT_EX, ciw);
                 int hSentCN = string.IsNullOrEmpty(sentCN) ? 0 : MeasureH(sentCN, FONT_EXCN, ciw);
-                int hPhr    = string.IsNullOrEmpty(phrase) ? 0 : MeasureH("◆ " + phrase, FONT_EX, ciw);
-                int hPhrCN  = string.IsNullOrEmpty(phraseCN) ? 0 : MeasureH(phraseCN, FONT_EXCN, ciw);
+                var phrRows = PhraseRows(phrase, phraseCN);   // #131 英-中-英-中 逐条配对
+                int hPhr    = MeasurePhraseRows(phrRows, ciw);
                 int hStat   = string.IsNullOrEmpty(status) ? 0 : MeasureH(status, FONT_STAT, cw);
 
                 // 段间固定间距（10px），只在两块都非空时计入
@@ -252,12 +338,11 @@ namespace ToastFish.View
                 bool hasPhr   = !string.IsNullOrEmpty(phrase);
                 bool hasStat  = !string.IsNullOrEmpty(status);
                 bool hasSentCN = !string.IsNullOrEmpty(sentCN);
-                bool hasPhrCN  = !string.IsNullOrEmpty(phraseCN);
 
                 int contentH = 14 + hWord
                     + (hasPos ? GAP + hPos : 0)
                     + (hasSent ? GAP + hSent + 2 + (hasSentCN ? hSentCN : 0) : 0)
-                    + (hasPhr ? GAP + hPhr + 2 + (hasPhrCN ? hPhrCN : 0) : 0)
+                    + (hasPhr ? GAP + hPhr : 0)
                     + (hasStat ? GAP + hStat : 0)
                     + 8;
 
@@ -311,15 +396,15 @@ namespace ToastFish.View
                 if (!string.IsNullOrEmpty(phrase))
                 {
                     int x1 = pad + 8, w1 = ciw;
-                    var phlbl = NewFixedLabel("◆ " + phrase, Color.FromArgb(180, 180, 180), FONT_EX, x1, y, w1, MeasureH("◆ " + phrase, FONT_EX, w1));
-                    form.Controls.Add(phlbl);
-                    y += phlbl.Height + 2;
-
-                    if (!string.IsNullOrEmpty(phraseCN))
+                    for (int ri = 0; ri < phrRows.Count; ri++)
                     {
-                        var pclbl = NewFixedLabel(phraseCN, Color.FromArgb(140, 140, 140), FONT_EXCN, x1, y, w1, hPhrCN);
-                        form.Controls.Add(pclbl);
-                        y += hPhrCN;
+                        var row = phrRows[ri];
+                        int rh = MeasureH(row.Key, row.Value ? FONT_EXCN : FONT_EX, w1);
+                        var rlbl = NewFixedLabel(row.Key,
+                            row.Value ? Color.FromArgb(140, 140, 140) : Color.FromArgb(180, 180, 180),
+                            row.Value ? FONT_EXCN : FONT_EX, x1, y, w1, rh);
+                        form.Controls.Add(rlbl);
+                        y += rh + (ri == phrRows.Count - 1 ? 0 : 2);
                     }
                     if (hStat > 0) y += GAP_SECTION;
                 }
@@ -433,8 +518,8 @@ namespace ToastFish.View
                 int hPos    = MeasureH(posTran, FONT_POS, cw);
                 int hSent   = string.IsNullOrEmpty(sentence) ? 0 : MeasureH("「" + sentence + "」", FONT_EX, ciw);
                 int hSentCN = string.IsNullOrEmpty(sentCN) ? 0 : MeasureH(sentCN, FONT_EXCN, ciw);
-                int hPhr    = string.IsNullOrEmpty(phrase) ? 0 : MeasureH("◆ " + phrase, FONT_EX, ciw);
-                int hPhrCN  = string.IsNullOrEmpty(phraseCN) ? 0 : MeasureH(phraseCN, FONT_EXCN, ciw);
+                var phrRows = PhraseRows(phrase, phraseCN);   // #131 英-中-英-中 逐条配对
+                int hPhr    = MeasurePhraseRows(phrRows, ciw);
                 int hStat   = string.IsNullOrEmpty(status) ? 0 : MeasureH(status, FONT_STAT, cw);
 
                 const int GAP = 10;
@@ -443,12 +528,11 @@ namespace ToastFish.View
                 bool hasPhr   = !string.IsNullOrEmpty(phrase);
                 bool hasStat  = !string.IsNullOrEmpty(status);
                 bool hasSentCN = !string.IsNullOrEmpty(sentCN);
-                bool hasPhrCN  = !string.IsNullOrEmpty(phraseCN);
 
                 int contentH = 14 + hWord
                     + (hasPos ? GAP + hPos : 0)
                     + (hasSent ? GAP + hSent + 2 + (hasSentCN ? hSentCN : 0) : 0)
-                    + (hasPhr ? GAP + hPhr + 2 + (hasPhrCN ? hPhrCN : 0) : 0)
+                    + (hasPhr ? GAP + hPhr : 0)
                     + (hasStat ? GAP + hStat : 0)
                     + 8;
 
@@ -503,15 +587,15 @@ namespace ToastFish.View
                 if (!string.IsNullOrEmpty(phrase))
                 {
                     int x1 = pad + 8, w1 = ciw;
-                    var phlbl = NewFixedLabel("◆ " + phrase, Color.FromArgb(180, 180, 180), FONT_EX, x1, y, w1, MeasureH("◆ " + phrase, FONT_EX, w1));
-                    form.Controls.Add(phlbl);
-                    y += phlbl.Height + 2;
-
-                    if (!string.IsNullOrEmpty(phraseCN))
+                    for (int ri = 0; ri < phrRows.Count; ri++)
                     {
-                        var pclbl = NewFixedLabel(phraseCN, Color.FromArgb(140, 140, 140), FONT_EXCN, x1, y, w1, hPhrCN);
-                        form.Controls.Add(pclbl);
-                        y += hPhrCN;
+                        var row = phrRows[ri];
+                        int rh = MeasureH(row.Key, row.Value ? FONT_EXCN : FONT_EX, w1);
+                        var rlbl = NewFixedLabel(row.Key,
+                            row.Value ? Color.FromArgb(140, 140, 140) : Color.FromArgb(180, 180, 180),
+                            row.Value ? FONT_EXCN : FONT_EX, x1, y, w1, rh);
+                        form.Controls.Add(rlbl);
+                        y += rh + (ri == phrRows.Count - 1 ? 0 : 2);
                     }
                     if (hStat > 0) y += GAP_SECTION;
                 }
