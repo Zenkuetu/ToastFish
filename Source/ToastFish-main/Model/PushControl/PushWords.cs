@@ -92,6 +92,12 @@ namespace ToastFish.Model.PushControl
         private static string _pendingPeekText = null;
 
         /// <summary>
+        /// #139 预览浮层的锚点：按下 3/4 那一刻单词窗还在，先把它的矩形记下来。
+        /// 本轮最后一张卡没有「下一张卡」可挂，收尾时就用这块矩形把预览贴在同一位置上方。
+        /// </summary>
+        private static System.Drawing.Rectangle _pendingPeekRect = System.Drawing.Rectangle.Empty;
+
+        /// <summary>
         /// 记一次「本轮第 N 次弹出」；已达 MAX_ROUND_SHOWS 返回 false（调用方跳过，留到下一轮）。
         /// 抽成方法是因为新词/复习词/学习中词三条 pushCard 路径都要计数 —— 分散写容易漏一条，
         /// 漏掉任意一条就等于没有上限（2026-11-03 用户反馈：一直答「不记得/模糊」会弹出特别多次）。
@@ -776,6 +782,24 @@ namespace ToastFish.Model.PushControl
             }
         }
 
+        /// <summary>
+        /// #139 收尾补弹一次：最后一张卡按了 3/4，预览本来要等「下一张卡的单词窗」才出现 ——
+        /// 本轮没有下一张卡，于是一次都不弹（用户实报）。卡片全部处理完、测验开始前补出来。
+        /// 用按 3/4 时记下的弹窗矩形定位，3 秒自消；测验窗的 CloseMessageOverlays 不会收它。
+        /// </summary>
+        internal static void FlushPendingWordPeek()
+        {
+            if (!_pendingWordPeek) return;
+            string text = _pendingPeekText;
+            System.Drawing.Rectangle rect = _pendingPeekRect;
+            _pendingWordPeek = false;
+            _pendingPeekText = null;
+            _pendingPeekRect = System.Drawing.Rectangle.Empty;
+            if (string.IsNullOrEmpty(text)) return;
+            try { NotificationForm.ShowWordPreviewAbove(text, NotificationForm.TIMEOUT_PREVIEW, rect); }
+            catch (Exception ex) { Debug.WriteLine("#139 收尾预览失败: " + ex.Message); }
+        }
+
         public double pushCard(Card card, Cardstatus cardstatus, int numNewCards, int numLearingCards, int numReviewedCards)
         {
             Word CurrentWord = card.word;
@@ -791,15 +815,26 @@ namespace ToastFish.Model.PushControl
             {
                 bool showPreview = _pendingWordPeek;
                 string peekText = _pendingPeekText;
+                System.Drawing.Rectangle peekRect = _pendingPeekRect;
                 _pendingWordPeek = false;
                 _pendingPeekText = null;
+                _pendingPeekRect = System.Drawing.Rectangle.Empty;
 
                 // 先弹窗，再播语音
                 PushOneWordSM2(CurrentWord, cardstatus, numNewCards, numLearingCards, numReviewedCards, recallMode);
                 if (showPreview)
+                {
+                    // 下一张卡已经弹出来了（正常路径）→ 沿用「挂在当前弹窗正上方」；
+                    // 只有它没弹出来（收尾路径）才用记下的矩形（#139）
+                    System.Drawing.Rectangle liveRect = NotificationForm.CaptureCurrentPopupBounds();
                     NotificationForm.ShowWordPreviewAbove(
                         string.IsNullOrEmpty(peekText) ? WordPeekText(CurrentWord) : peekText,
-                        NotificationForm.TIMEOUT_PREVIEW);
+                        NotificationForm.TIMEOUT_PREVIEW,
+                        liveRect == System.Drawing.Rectangle.Empty ? peekRect : System.Drawing.Rectangle.Empty);
+                }
+
+                // #139：按 3/4 时单词窗马上就会被关掉，矩形得趁现在还活着先记下来
+                System.Drawing.Rectangle wordRect = NotificationForm.CaptureCurrentPopupBounds();
 
                 if (Select.AUTO_PLAY != 0)
                     PlayWordSoundAsync(word_save_name, word_pron, CurrentWord.headWord);
@@ -851,6 +886,7 @@ namespace ToastFish.Model.PushControl
                     // 3/4 直接过关：下一张卡上方补 3 秒预览 —— 文字此刻就定下来，别等下一张卡（#136 修订）
                     _pendingPeekText = WordPeekText(CurrentWord);
                     _pendingWordPeek = true;
+                    _pendingPeekRect = wordRect;   // #139：本轮最后一张卡没有下一张卡，收尾时靠它定位
                 }
                 return ScoreOfAnswer(answer);
             }
@@ -860,6 +896,11 @@ namespace ToastFish.Model.PushControl
         {
             // 测试模式：在 Select 实例的连接上开启事务，finally 中 ROLLBACK 回滚所有 SM2 写入
             System.Data.SQLite.SQLiteTransaction testTx = null;
+
+            // #139：上一轮中途退出（卡题 -1 / 异常）会留下预览标志，别让它串到这一轮的第一张卡
+            _pendingWordPeek = false;
+            _pendingPeekText = null;
+            _pendingPeekRect = System.Drawing.Rectangle.Empty;
 
             IsLearningActive = true;
 
@@ -1222,6 +1263,9 @@ namespace ToastFish.Model.PushControl
                 }
 
             }
+
+            // #139：本轮卡片全部答完 —— 最后一张卡若按的是 3/4，那条预览现在补出来（再晚就被测验弹窗盖住）
+            FlushPendingWordPeek();
 
             Debug.WriteLine($"更新数据库 @{DateTime.Now}");
             Query.updateCardDateBase(FinishedCardLst);

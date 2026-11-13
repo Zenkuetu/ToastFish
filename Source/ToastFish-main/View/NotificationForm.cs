@@ -62,6 +62,10 @@ namespace ToastFish.View
         // 用户看着像"提示把题目盖住了"。这里按 正上方 → 左侧 → 下方 依次找空位，并叠开多条提示。
         private static readonly List<Form> _overlayForms = new List<Form>();
 
+        /// <summary>#139：两段式记忆的「单词+释义」预览浮层。3 秒自消，不能被下一个弹窗顺手收掉
+        /// （本轮最后一张卡按 3/4 时，紧接着弹出的测验窗会 CloseMessageOverlays，预览还没看清就没了）。</summary>
+        private static readonly HashSet<Form> _previewForms = new HashSet<Form>();
+
         /// <summary>#97：取最后一个还活着的提示浮层（顺带清理已销毁的引用）。</summary>
         private static Form LastLiveOverlay()
         {
@@ -85,36 +89,45 @@ namespace ToastFish.View
             foreach (var f in alive)
             {
                 if (f == null || f.IsDisposed) continue;
+                if (_previewForms.Contains(f)) continue;   // #139 预览浮层自己会 3 秒后关
                 try { f.Close(); } catch { }
             }
         }
 
-        private static void PlaceOverlay(Form form, Rectangle wa, Form baseFormHint = null)
+        private static void PlaceOverlay(Form form, Rectangle wa, Form baseFormHint = null, Rectangle? baseBounds = null)
         {
             const int gap = 10;
-            var host = _current;
-            if (host == null || host.IsDisposed)
+            Rectangle b;
+            if (baseBounds.HasValue)
             {
-                form.Location = new Point(wa.Right - form.Width - 20, wa.Bottom - form.Height - 20);
-                return;
+                // #139：宿主已经不在了（本轮最后一张卡按完 3/4，单词窗已关）——按记下来的那块矩形贴
+                b = baseBounds.Value;
+            }
+            else
+            {
+                var host = _current;
+                if (host == null || host.IsDisposed)
+                {
+                    form.Location = new Point(wa.Right - form.Width - 20, wa.Bottom - form.Height - 20);
+                    return;
+                }
+                b = (baseFormHint ?? LastLiveOverlay() ?? host).Bounds;
             }
 
-            var baseForm = baseFormHint ?? LastLiveOverlay() ?? host;
-
             int w = form.Width, h = form.Height;
-            int left = baseForm.Right - w;      // 与目标右对齐
-            int top = baseForm.Top - h - gap;   // 优先放正上方
+            int left = b.Right - w;      // 与目标右对齐
+            int top = b.Top - h - gap;   // 优先放正上方
             if (top < wa.Top + gap)
             {
-                left = baseForm.Left - w - gap; // 上方放不下 → 放左侧
-                top = baseForm.Bottom - h;
+                left = b.Left - w - gap; // 上方放不下 → 放左侧
+                top = b.Bottom - h;
                 if (left < wa.Left + gap)
                 {
-                    left = baseForm.Left;       // 左侧也放不下 → 放下方
-                    top = baseForm.Bottom + gap;
+                    left = b.Left;       // 左侧也放不下 → 放下方
+                    top = b.Bottom + gap;
                     if (top + h > wa.Bottom - gap)  // 下方也放不下 → 退回左上角
                     {
-                        left = baseForm.Left - w - gap;
+                        left = b.Left - w - gap;
                         top = wa.Top + gap;
                     }
                 }
@@ -584,10 +597,24 @@ namespace ToastFish.View
         /// </summary>
         public static void ShowWordPreviewAbove(string data, int timeoutMs = TIMEOUT_PREVIEW)
         {
-            ShowWordPreviewCore(data, timeoutMs, true, "");
+            ShowWordPreviewCore(data, timeoutMs, true, "", null);
         }
 
-        private static void ShowWordPreviewCore(string data, int timeoutMs, bool aboveCurrent, string footerHint)
+        /// <summary>#139：宿主单词窗已经关掉了（本轮最后一张卡），按记下来的矩形贴上去。</summary>
+        internal static void ShowWordPreviewAbove(string data, int timeoutMs, Rectangle anchor)
+        {
+            ShowWordPreviewCore(data, timeoutMs, true, "", anchor == Rectangle.Empty ? (Rectangle?)null : anchor);
+        }
+
+        /// <summary>#139：取还活着的弹窗矩形（3/4 按下前调用），供收尾时给预览浮层定位。</summary>
+        internal static Rectangle CaptureCurrentPopupBounds()
+        {
+            var c = _current;
+            if (c == null || c.IsDisposed) return Rectangle.Empty;
+            try { return c.Bounds; } catch { return Rectangle.Empty; }
+        }
+
+        private static void ShowWordPreviewCore(string data, int timeoutMs, bool aboveCurrent, string footerHint, Rectangle? anchor = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) return;
@@ -670,7 +697,7 @@ namespace ToastFish.View
                 form.Zoomable = false;   // 浮层不自己放大，只跟着宿主挪（#136 修订三）
 
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                if (aboveCurrent) PlaceOverlay(form, wa);   // #136 挂到当前单词弹窗正上方
+                if (aboveCurrent) PlaceOverlay(form, wa, null, anchor);   // #136 挂到当前单词弹窗正上方（#139 宿主不在时按锚点矩形）
                 else form.PlaceBottomRight(wa);
 
                 // === 逐段放置 ===
@@ -750,15 +777,20 @@ namespace ToastFish.View
                 {
                     timer.Dispose();
                     if (!aboveCurrent && _current == form) _current = null;
-                    if (aboveCurrent) _overlayForms.Remove(form);   // #136 浮层不接管 _current
+                    if (aboveCurrent)
+                    {
+                        _overlayForms.Remove(form);   // #136 浮层不接管 _current
+                        _previewForms.Remove(form);   // #139
+                    }
                     _isHidden = false;
                     form.Dispose();
                 };
 
                 if (aboveCurrent)
                 {
-                    // 只是浮层：挂进 _overlayForms，下一张答题弹窗出现时会被 CloseMessageOverlays 顺手收掉
+                    // 只是浮层：挂进 _overlayForms；#139 起登记进 _previewForms，下一个弹窗的 CloseMessageOverlays 不再收它
                     _overlayForms.Add(form);
+                    _previewForms.Add(form);
                     form.Show();
                 }
                 else
