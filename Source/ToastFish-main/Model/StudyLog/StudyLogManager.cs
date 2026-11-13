@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.SQLite;
 using System.Linq;
+using ToastFish.Model.SqliteControl;
 
 namespace ToastFish.Model.StudyLog
 {
@@ -95,6 +96,57 @@ namespace ToastFish.Model.StudyLog
                 cmd.Parameters.AddWithValue("@hard", hard);
                 cmd.Parameters.AddWithValue("@again", again);
                 cmd.ExecuteNonQuery();
+            }
+        }
+
+        /// <summary>
+        /// #133（3.4.10）：把「学过但还没记账」的词立刻结算进 StudyLog。
+        /// 原来只有托盘「退出」时才走 PostLearnApply() + LogStudySession()，
+        /// 而 ToastFish 是常驻托盘的程序，一开好几天不退出 —— 仪表盘的「累计学习词次」
+        /// 就一直停在最后一次正常退出时的数字；更糟的是进程被结束时重启，
+        /// PreLearnBackup() 会把 dateLastReviewed_bak 直接覆盖成 dateLastReviewed，
+        /// 这批还没记账的成绩就永久丢了。
+        /// PostLearnApply() 结算后会把 bak 同步成 dlr，所以本方法可以反复调用、不会重复计数。
+        /// </summary>
+        /// <returns>本次记账的词数（0 表示没有待结算数据）</returns>
+        public static int FlushPendingStudyLog()
+        {
+            try
+            {
+                var result = Select.PostLearnApply();
+                if (result == null || result.TotalWords <= 0) return 0;
+
+                string dbPath = System.IO.Path.Combine(PathHelper.ExeDir, "Resources", "inami.db");
+                using (var db = new SQLiteConnection("Data Source=" + dbPath + ";Version=3"))
+                {
+                    db.Open();
+
+                    // 词库名以 Global.currentBookName 为准：Select.TABLE_NAME 是静态字段，
+                    // 没构造过 Select 的新进程里还是默认值 "CET4_1"（会把成绩记到错的词书）
+                    string bookName = Select.TABLE_NAME;
+                    try
+                    {
+                        using (var cmd = db.CreateCommand())
+                        {
+                            cmd.CommandText = "SELECT currentBookName FROM Global";
+                            var value = cmd.ExecuteScalar();
+                            if (value != null && value != DBNull.Value && value.ToString().Trim().Length > 0)
+                                bookName = value.ToString().Trim();
+                        }
+                    }
+                    catch { }
+
+                    LogStudySession(db, bookName, result.TotalWords,
+                        result.EasyCount, result.GoodCount, result.HardCount, result.AgainCount);
+                }
+                System.Diagnostics.Debug.WriteLine(
+                    $"#133 StudyLog +{result.TotalWords} 词（Easy {result.EasyCount} / Good {result.GoodCount} / Hard {result.HardCount} / Again {result.AgainCount}）");
+                return result.TotalWords;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("#133 FlushPendingStudyLog 失败: " + ex.Message);
+                return 0;
             }
         }
 

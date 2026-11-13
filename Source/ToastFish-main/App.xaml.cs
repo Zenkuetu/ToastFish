@@ -35,6 +35,10 @@ namespace ToastFish
             // 建表（EssayLog 等新增表，幂等）
             try { Select.CreateEssayLogTable(); } catch { }
 
+            // #133（3.4.10）：先把上次没来得及记账的成绩结算掉，再覆盖 dateLastReviewed_bak ——
+            // 顺序反了的话，被强行结束（或断电）那一轮的成绩会被 PreLearnBackup() 抹掉
+            try { Model.StudyLog.StudyLogManager.FlushPendingStudyLog(); } catch { }
+
             // 学习前备份 dateLastReviewed → dateLastReviewed_bak
             try { Select.PreLearnBackup(); } catch { }
         }

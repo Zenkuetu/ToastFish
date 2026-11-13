@@ -204,6 +204,7 @@ namespace ToastFish
         System.Windows.Forms.ToolStripMenuItem ExitMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 
         System.Windows.Forms.ToolStripMenuItem SetAutoPlay = new System.Windows.Forms.ToolStripMenuItem();
+        System.Windows.Forms.ToolStripMenuItem SetRecallMode = new System.Windows.Forms.ToolStripMenuItem();   // #136 两步记忆
         System.Windows.Forms.ToolStripMenuItem SetAutoLog = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SetAiEssay = new System.Windows.Forms.ToolStripMenuItem();
         System.Windows.Forms.ToolStripMenuItem SetAiModel = new System.Windows.Forms.ToolStripMenuItem();
@@ -248,6 +249,11 @@ namespace ToastFish
                 SetAutoPlay.Checked = true;
             else
                 SetAutoPlay.Checked = false;
+
+            // #136 两步记忆：开 = 先只显示单词+音标，按 1/2 才展开释义（默认开）
+            SetRecallMode.Text = "两步记忆（先只看单词）";
+            SetRecallMode.Click += new EventHandler(RecallMode_Click);
+            SetRecallMode.Checked = Select.RECALL_MODE != 0;
 
             SetAutoLog.Text = "自动日志";
             SetAutoLog.Click += new EventHandler(AutoLog_Click);
@@ -451,6 +457,7 @@ namespace ToastFish
             ((ToolStripDropDownItem)Cms.Items[4]).DropDownItems.Add(RandomJpWord);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetNumber);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAccent);
+            ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetRecallMode);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAutoPlay);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAutoLog);
             ((ToolStripDropDownItem)Cms.Items[5]).DropDownItems.Add(SetAiEssay);
@@ -804,6 +811,35 @@ namespace ToastFish
 
 
         
+
+        /// <summary>
+        /// #136 两步记忆开关：开 = 先只显示单词+音标，按 1/2 才展开释义（默认）；关 = 回到一次显示全部信息。
+        /// 立即生效（pushCard 每次取卡片时读 Select.RECALL_MODE），并写回 Global.recallMode。
+        /// </summary>
+        private void RecallMode_Click(object sender, EventArgs e)
+        {
+            Select.RECALL_MODE = (Select.RECALL_MODE != 0) ? 0 : 1;
+            var item = sender as ToolStripMenuItem;
+            if (item != null) item.Checked = Select.RECALL_MODE != 0;
+            try
+            {
+                using (Select temp = new Select())
+                {
+                    temp.UpdateGlobalConfig();
+                }
+            }
+            catch (Exception ex)
+            {
+                // 存不进去也要先把本次会话切过来，下次启动再回退到旧值
+                ToastBridge.ShowMessage("ToastFish", "两步记忆设置没记住：" + ex.Message, 4000);
+                return;
+            }
+            ToastBridge.ShowMessage("ToastFish",
+                Select.RECALL_MODE != 0
+                    ? "已开启两步记忆：先只看单词，按 Alt+1/2 才看释义"
+                    : "已关闭两步记忆：弹窗一次显示全部信息",
+                3500);
+        }
 
         private void ImportWords_Click(object sender, EventArgs e)
         {

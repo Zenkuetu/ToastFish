@@ -89,7 +89,7 @@ namespace ToastFish.View
             }
         }
 
-        private static void PlaceOverlay(Form form, Rectangle wa)
+        private static void PlaceOverlay(Form form, Rectangle wa, Form baseFormHint = null)
         {
             const int gap = 10;
             var host = _current;
@@ -99,7 +99,7 @@ namespace ToastFish.View
                 return;
             }
 
-            var baseForm = LastLiveOverlay() ?? host;
+            var baseForm = baseFormHint ?? LastLiveOverlay() ?? host;
 
             int w = form.Width, h = form.Height;
             int left = baseForm.Right - w;      // 与目标右对齐
@@ -122,6 +122,35 @@ namespace ToastFish.View
             left = Math.Max(wa.Left + gap, Math.Min(left, wa.Right - w - gap));
             top = Math.Max(wa.Top + gap, Math.Min(top, wa.Bottom - h - gap));
             form.Location = new Point(left, top);
+        }
+
+        /// <summary>
+        /// #136 修订三：宿主弹窗因为 Alt 放大 / 还原而改变尺寸或位置后，把挂在它上面的浮层重新贴一遍，
+        /// 否则浮层还停在放大前的坐标，会和放大后的单词窗叠在一起（用户实报）。
+        /// 只认 host 是否就是当前弹窗；其它弹窗缩放时不动浮层。
+        /// </summary>
+        internal static void RepositionOverlays(Form host)
+        {
+            if (host == null || host.IsDisposed) return;
+            if (!ReferenceEquals(_current, host)) return;
+            if (_overlayForms.Count == 0) return;
+
+            var wa = Screen.PrimaryScreen.WorkingArea;
+            var snapshot = new List<Form>(_overlayForms);
+            _overlayForms.Clear();
+            Form baseForm = host;   // 多个浮层依次往上叠，后面的避开前面的
+            foreach (var f in snapshot)
+            {
+                if (f == null || f.IsDisposed) continue;
+                _overlayForms.Add(f);
+                if (!f.Visible) continue;
+                try
+                {
+                    PlaceOverlay(f, wa, baseForm);
+                    baseForm = f;
+                }
+                catch { }
+            }
         }
 
         /// <summary>#94：标记这张弹窗已经作答，之后普通提示消息就可以安全关掉它了。</summary>
@@ -168,11 +197,24 @@ namespace ToastFish.View
                 TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
         }
 
+        /// <summary>#135 词组拆分上限：超过就当作脏数据整串显示（正常词条最多 12 条）</summary>
+        private const int MAX_PHRASE_ITEMS = 16;
+        private const int MAX_PHRASE_CHARS = 1000;
+
+        /// <summary>#135 行内是否含中日韩字符（call 的义项里混着「人、组织、报告 + call for + 行动或措施」这类中文注释，要用中文字体画）</summary>
+        private static bool HasCjk(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return false;
+            foreach (char c in s)
+                if (c >= 0x3400 && c <= 0x9FFF) return true;
+            return false;
+        }
+
         /// <summary>
         /// #130 词组的插入格式是「义项1; 义项2; 义项3」（中英标点都算），这里按分隔符拆成多条，
         /// 让每个义项各占一行 —— 以前整串丢给 Label，只会按宽度随便折行，义项边界看不出来。
         /// #131 两条保护：① 括号里的分号不拆（如「西方国家（western 西方；country 的复数形式）；西域」）；
-        /// ② 拆出超过 8 条视为脏数据，整串原样显示，免得把弹窗撑爆。
+        /// ② 拆出超过 MAX_PHRASE_ITEMS 条（或总长超 MAX_PHRASE_CHARS）视为脏数据，整串原样显示，免得把弹窗撑爆。
         /// </summary>
         private static string[] SplitItems(string text)
         {
@@ -206,7 +248,10 @@ namespace ToastFish.View
             string last = sb.ToString().Trim();
             if (last.Length > 0) list.Add(last);
 
-            if (list.Count > 8) return new string[] { text.Trim() };
+            // #135 原来「>8 条当脏数据整串塞回」把 call 这种 12 条义项的正常词也打回一行。
+            // 现在只拦明显是脏数据的：条数极多（整段文章）或总长极长。
+            if (list.Count > MAX_PHRASE_ITEMS || text.Length > MAX_PHRASE_CHARS)
+                return new string[] { text.Trim() };
             return list.ToArray();
         }
 
@@ -225,7 +270,7 @@ namespace ToastFish.View
             string cnPad = en.Length > 1 ? "   " : "";
 
             for (int i = 0; i < en.Length; i++)
-                rows.Add(new KeyValuePair<string, bool>((i == 0 ? "◆ " : "   ") + en[i], false));
+                rows.Add(new KeyValuePair<string, bool>((i == 0 ? "◆ " : "   ") + en[i], HasCjk(en[i])));
 
             if (pair)
             {
@@ -252,6 +297,31 @@ namespace ToastFish.View
             foreach (var row in rows)
                 h += MeasureH(row.Key, row.Value ? FONT_EXCN : FONT_EX, width) + 2;
             return h - 2;
+        }
+
+        /// <summary>
+        /// #135 词组块超过可用高时，尾部折叠成「…（还有 N 条没显示）」——
+        /// 义项多的词（call 有 12 条）逐条展开后可能比窗口还高，宁可截断也不能让标签画到窗口外面。
+        /// </summary>
+        private static List<KeyValuePair<string, bool>> ClampPhraseRows(
+            List<KeyValuePair<string, bool>> rows, int width, int maxH)
+        {
+            if (rows == null || rows.Count == 0) return rows;
+            if (MeasurePhraseRows(rows, width) <= maxH) return rows;
+
+            int hintH = MeasureH("   …（还有 99 条没显示）", FONT_EXCN, width) + 2;
+            var keep = new List<KeyValuePair<string, bool>>();
+            int used = 0, i = 0;
+            for (; i < rows.Count; i++)
+            {
+                int h = MeasureH(rows[i].Key, rows[i].Value ? FONT_EXCN : FONT_EX, width) + 2;
+                if (used + h + hintH > maxH) break;
+                keep.Add(rows[i]);
+                used += h;
+            }
+            if (i < rows.Count)
+                keep.Add(new KeyValuePair<string, bool>("   …（还有 " + (rows.Count - i) + " 条没显示）", true));
+            return keep;
         }
 
         /// <summary>当前屏幕工作区（非 DPI-aware 下与所有测量同处一个逻辑像素坐标系，125%/150% 比例自洽）</summary>
@@ -338,6 +408,24 @@ namespace ToastFish.View
                 bool hasPhr   = !string.IsNullOrEmpty(phrase);
                 bool hasStat  = !string.IsNullOrEmpty(status);
                 bool hasSentCN = !string.IsNullOrEmpty(sentCN);
+
+                // #135 义项多的词（call 有 12 条）逐条展开后可能高过窗口，按可用高折叠尾部
+                int capH85 = (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85);
+                if (hasPhr)
+                {
+                    int othersH = 14 + hWord
+                        + (hasPos ? GAP + hPos : 0)
+                        + (hasSent ? GAP + hSent + 2 + (hasSentCN ? hSentCN : 0) : 0)
+                        + (hasStat ? GAP + hStat : 0)
+                        + 8;
+                    int budget = capH85 - 64 - othersH - GAP;   // 64 = 按钮区 44 + 底部留白 20
+                    if (budget < 60) budget = 60;
+                    if (hPhr > budget)
+                    {
+                        phrRows = ClampPhraseRows(phrRows, ciw, budget);
+                        hPhr = MeasurePhraseRows(phrRows, ciw);
+                    }
+                }
 
                 int contentH = 14 + hWord
                     + (hasPos ? GAP + hPos : 0)
@@ -486,16 +574,34 @@ namespace ToastFish.View
         /// </summary>
         public static void ShowWordPreviewPopup(string data, int timeoutMs = TIMEOUT_PREVIEW)
         {
+            ShowWordPreviewCore(data, timeoutMs, false, "✗ 回答错误");
+        }
+
+        /// <summary>
+        /// #136 两段式记忆：第一段按了「记住 / 牢记」直接过关时，在**下一张单词弹窗上方**浮 3 秒的
+        /// 「单词 + 音标 + 释义」预览。与 ShowWordPreviewPopup 的区别：
+        /// 不接管 _current、不关掉正在等按键的单词弹窗，只作为一个浮层挂在它上方（PlaceOverlay）。
+        /// </summary>
+        public static void ShowWordPreviewAbove(string data, int timeoutMs = TIMEOUT_PREVIEW)
+        {
+            ShowWordPreviewCore(data, timeoutMs, true, "");
+        }
+
+        private static void ShowWordPreviewCore(string data, int timeoutMs, bool aboveCurrent, string footerHint)
+        {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) return;
 
             dispatcher.BeginInvoke(new Action(() =>
             {
-                // 不关闭当前弹窗（惊喜复习弹窗本身就是当前弹窗，由 ProcessAnswer 在回调中关闭）
-                // 但如果已有预览弹窗，先关掉旧的
-                CloseMessageOverlays();
-                _current?.Close();
-                _current?.Dispose();
+                if (!aboveCurrent)
+                {
+                    // 不关闭当前弹窗（惊喜复习弹窗本身就是当前弹窗，由 ProcessAnswer 在回调中关闭）
+                    // 但如果已有预览弹窗，先关掉旧的
+                    CloseMessageOverlays();
+                    _current?.Close();
+                    _current?.Dispose();
+                }
 
                 string[] fields = data.Split(new[] { "‖" }, StringSplitOptions.None);
                 string word      = fields.Length > 0 ? fields[0].Trim() : "";
@@ -529,6 +635,24 @@ namespace ToastFish.View
                 bool hasStat  = !string.IsNullOrEmpty(status);
                 bool hasSentCN = !string.IsNullOrEmpty(sentCN);
 
+                // #135 义项多的词（call 有 12 条）逐条展开后可能高过窗口，按可用高折叠尾部
+                int capH85 = (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85);
+                if (hasPhr)
+                {
+                    int othersH = 14 + hWord
+                        + (hasPos ? GAP + hPos : 0)
+                        + (hasSent ? GAP + hSent + 2 + (hasSentCN ? hSentCN : 0) : 0)
+                        + (hasStat ? GAP + hStat : 0)
+                        + 8;
+                    int budget = capH85 - 64 - othersH - GAP;   // 64 = 按钮区 44 + 底部留白 20
+                    if (budget < 60) budget = 60;
+                    if (hPhr > budget)
+                    {
+                        phrRows = ClampPhraseRows(phrRows, ciw, budget);
+                        hPhr = MeasurePhraseRows(phrRows, ciw);
+                    }
+                }
+
                 int contentH = 14 + hWord
                     + (hasPos ? GAP + hPos : 0)
                     + (hasSent ? GAP + hSent + 2 + (hasSentCN ? hSentCN : 0) : 0)
@@ -536,16 +660,18 @@ namespace ToastFish.View
                     + (hasStat ? GAP + hStat : 0)
                     + 8;
 
-                // 无按钮区域，底部仅加答错提示行（~24px）
-                int hintH = 24;
+                // 无按钮区域，底部仅加提示行（惊喜复习预览是「✗ 回答错误」，两段式预览没有）
+                int hintH = string.IsNullOrEmpty(footerHint) ? 0 : 24;
                 int formH = contentH + hintH + 20;
                 formH = Math.Min(formH, (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.85));
                 formH = Math.Max(formH, 140);
 
                 var form = new PopupForm(formW, formH, "ToastFish");
+                form.Zoomable = false;   // 浮层不自己放大，只跟着宿主挪（#136 修订三）
 
                 var wa = Screen.PrimaryScreen.WorkingArea;
-                form.PlaceBottomRight(wa);
+                if (aboveCurrent) PlaceOverlay(form, wa);   // #136 挂到当前单词弹窗正上方
+                else form.PlaceBottomRight(wa);
 
                 // === 逐段放置 ===
                 int y = 14;
@@ -608,9 +734,12 @@ namespace ToastFish.View
                 }
 
                 // === 底部答错提示 ===
-                int hintY = form.ClientSize.Height - hintH - 10;
-                var hintLbl = NewFixedLabel("✗ 回答错误", Color.FromArgb(255, 100, 100), FONT_BTN, pad, hintY, cw, hintH);
-                form.Controls.Add(hintLbl);
+                if (!string.IsNullOrEmpty(footerHint))
+                {
+                    int hintY = form.ClientSize.Height - hintH - 10;
+                    var hintLbl = NewFixedLabel(footerHint, Color.FromArgb(255, 100, 100), FONT_BTN, pad, hintY, cw, hintH);
+                    form.Controls.Add(hintLbl);
+                }
 
                 // 3 秒自动关闭
                 var timer = new System.Windows.Forms.Timer { Interval = timeoutMs };
@@ -620,14 +749,24 @@ namespace ToastFish.View
                 form.FormClosed += (s, e) =>
                 {
                     timer.Dispose();
-                    if (_current == form) _current = null;
+                    if (!aboveCurrent && _current == form) _current = null;
+                    if (aboveCurrent) _overlayForms.Remove(form);   // #136 浮层不接管 _current
                     _isHidden = false;
                     form.Dispose();
                 };
 
-                _isHidden = false;
-                _current = form;
-                form.Show();
+                if (aboveCurrent)
+                {
+                    // 只是浮层：挂进 _overlayForms，下一张答题弹窗出现时会被 CloseMessageOverlays 顺手收掉
+                    _overlayForms.Add(form);
+                    form.Show();
+                }
+                else
+                {
+                    _isHidden = false;
+                    _current = form;
+                    form.Show();
+                }
             }));
         }
 
@@ -4195,6 +4334,26 @@ form.PlaceBottomRight();
         /// 所有弹窗共享同一个选择（不是每张弹窗独立记一份，否则同一屏两个弹窗状态会打架）。
         /// </summary>
         public static bool ZoomEnabled = true;
+
+        /// <summary>
+        /// 本弹窗是否参与「按住 Alt 放大」。浮层（过关预览、短提示）必须为 false：
+        /// 它们是挂在宿主窗口上的附属件，自己再放大一次就会和宿主叠在一起（#136 修订三）。
+        /// </summary>
+        private bool _zoomable = true;
+
+        public bool Zoomable
+        {
+            get { return _zoomable; }
+            set
+            {
+                _zoomable = value;
+                if (_zoomToggle != null) _zoomToggle.Visible = value;
+                if (!value && _zoom > 1f)
+                {
+                    try { ApplyZoom(1f); } catch { }
+                }
+            }
+        }
         /// <summary>右上角的小图标（A+）：点击开关「按住 Alt 放大」</summary>
         private Label _zoomToggle;
         private ToolTip _zoomToggleTip;
@@ -4373,6 +4532,12 @@ form.PlaceBottomRight();
         private void PollZoom()
         {
             if (IsDisposed) return;
+            if (!_zoomable)
+            {
+                _modHeldMs = 0;
+                if (_zoom > 1f) ApplyZoom(1f);
+                return;
+            }
             if (!ZoomEnabled)
             {
                 _modHeldMs = 0;
@@ -4411,6 +4576,7 @@ form.PlaceBottomRight();
                 if (!ZoomEnabled && _zoom > 1f) ApplyZoom(1f);
                 UpdateZoomToggleVisual();
             };
+            _zoomToggle.Visible = _zoomable;   // 浮层不参与放大，也就不该显示这个开关
             Controls.Add(_zoomToggle);
             UpdateZoomToggleVisual();
             PlaceZoomToggle();
@@ -4537,6 +4703,7 @@ form.PlaceBottomRight();
                 Invalidate(true);
                 PlaceZoomToggle();
                 if (_zoomToggle != null) _zoomToggle.BringToFront();
+                NotificationForm.RepositionOverlays(this);   // 放大/还原都会改本窗几何，浮层跟着重新贴（#136 修订三）
             }
         }
 

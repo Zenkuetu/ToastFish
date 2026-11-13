@@ -49,6 +49,13 @@ def read_all_data(conn):
     studylog = [dict(r) for r in conn.execute(
         'SELECT * FROM StudyLog ORDER BY date'
     ).fetchall()]
+    # 评分列全为 -1 = 「这天确实学了，但当时没记账，评分无从得知」（#134 补记的历史行）。
+    # 归零以免污染正确率/效率，另存标记供各图表跳过。
+    for r in studylog:
+        r['scoreUnknown'] = any((r[k] or 0) < 0 for k in
+                                ('scoreEASY', 'scoreGOOD', 'scoreHARD', 'scoreAGAIN'))
+        if r['scoreUnknown']:
+            r['scoreEASY'] = r['scoreGOOD'] = r['scoreHARD'] = r['scoreAGAIN'] = 0
 
     # Global 配置
     global_row = conn.execute('SELECT * FROM Global').fetchone()
@@ -299,10 +306,11 @@ def compute_page1(studylog, all_words, counts, book_stats, current_book):
     """
     # --- KPI ---
     total_reviewed = sum(r['wordsReviewed'] for r in studylog)
-    total_easy = sum(r['scoreEASY'] for r in studylog)
-    total_good = sum(r['scoreGOOD'] for r in studylog)
-    total_hard = sum(r['scoreHARD'] for r in studylog)
-    total_again = sum(r['scoreAGAIN'] for r in studylog)
+    scored_rows = [r for r in studylog if not r['scoreUnknown']]
+    total_easy = sum(r['scoreEASY'] for r in scored_rows)
+    total_good = sum(r['scoreGOOD'] for r in scored_rows)
+    total_hard = sum(r['scoreHARD'] for r in scored_rows)
+    total_again = sum(r['scoreAGAIN'] for r in scored_rows)
     total_scored = total_easy + total_good + total_hard + total_again
     accuracy = (total_easy + total_good) / total_scored * 100 if total_scored > 0 else 0
     max_daily = max((r['wordsReviewed'] for r in studylog), default=0)
@@ -416,7 +424,9 @@ def compute_page1(studylog, all_words, counts, book_stats, current_book):
                 'date': ds,
                 'words': w, 'easy': e, 'good': g, 'hard': h, 'again': a,
                 # 当天没学 → 不画点（0% 会被误读成"全错"）
-                'accuracy': round((e + g) / w * 100, 1) if w > 0 else None,
+                'accuracy': (round((e + g) / w * 100, 1)
+                             if w > 0 and not (r and r.get('scoreUnknown')) else None),
+                'scoreUnknown': bool(r and r.get('scoreUnknown')),
             })
             cumulative.append({'date': ds, 'cumulative': acc})
             d += timedelta(days=1)
@@ -425,6 +435,7 @@ def compute_page1(studylog, all_words, counts, book_stats, current_book):
     end_sunday = today + timedelta(days=(6 - today.weekday()))
     start_date = end_sunday - timedelta(days=20 * 7 - 1)
     date_word_map = {r['date']: r['wordsReviewed'] for r in studylog}
+    estimated_days = set(r['date'] for r in studylog if r['scoreUnknown'])
     calendar_data = []
     d = start_date
     while d <= end_sunday:
@@ -432,6 +443,7 @@ def compute_page1(studylog, all_words, counts, book_stats, current_book):
         calendar_data.append({
             'date': ds,
             'count': date_word_map.get(ds, 0),
+            'estimated': ds in estimated_days,
             'weekday': d.weekday(),
             'week': (d - start_date).days // 7,
             'future': d > today,
@@ -583,7 +595,8 @@ def compute_page2(studylog, words):
     efficiency_timeline = []
     for r in studylog:
         reviewed = r['wordsReviewed']
-        eff = round((r['scoreEASY'] + r['scoreGOOD']) / reviewed, 3) if reviewed > 0 else None
+        eff = (round((r['scoreEASY'] + r['scoreGOOD']) / reviewed, 3)
+               if reviewed > 0 and not r['scoreUnknown'] else None)
         efficiency_timeline.append({
             'date': r['date'], 'efficiency': eff, 'reviewed': reviewed
         })
@@ -618,7 +631,8 @@ def compute_page2(studylog, words):
             last_day = dt
         week_key = dt.strftime('%Y-W%W')
         wd = dt.weekday()
-        weekly_data[(week_key, wd)][0] += r['scoreEASY'] + r['scoreGOOD']
+        if not r['scoreUnknown']:
+            weekly_data[(week_key, wd)][0] += r['scoreEASY'] + r['scoreGOOD']
         weekly_data[(week_key, wd)][1] += r['wordsReviewed']
 
     rhythm_matrix = []

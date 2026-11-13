@@ -2041,7 +2041,7 @@ const PageOverview = {
               <div v-for="day in week" :key="day.date"
                    class="calendar-day"
                    :class="[day.future ? 'future' : 'count-' + (day.count <= 0 ? 0 : day.count <= 10 ? 1 : day.count <= 50 ? 2 : day.count <= 100 ? 3 : day.count <= 200 ? 4 : 5)]"
-                   :title="day.future ? day.date + '（未到）' : day.date + ': ' + day.count + ' 词'"></div>
+                   :title="day.future ? day.date + '（未到）' : day.date + ': ' + day.count + ' 词' + (day.estimated ? '（当天没记账，按轮次记录估算）' : '')"></div>
             </div>
           </template>
         </div>

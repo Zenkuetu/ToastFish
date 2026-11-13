@@ -132,6 +132,8 @@ def reset_database(db_path):
         "EngType = 2",    # 与 ENG_TYPE 默认值一致
         "autoLog = 1",    # 与 AUTO_LOG 默认值一致
     ]
+    if 'recallMode' in gcols:
+        gsets.append("recallMode = 1")   # #136 两步记忆默认开
     if 'pendingEssayWords' in gcols:
         gsets.append("pendingEssayWords = ''")
     conn.execute("UPDATE Global SET " + ", ".join(gsets))

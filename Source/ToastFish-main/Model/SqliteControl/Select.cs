@@ -29,6 +29,8 @@ namespace ToastFish.Model.SqliteControl
         public static int ENG_TYPE = 2;  // 英语类型1：美语，2：英语
         public static int AUTO_PLAY = 1;  // 英语自动发音
         public static int AUTO_LOG  = 1;  // 英语自动发音
+        // #136 两段式记忆：1 = 开（先只显示单词+音标，按 1/2 才展开释义），0 = 关（旧样子）
+        public static int RECALL_MODE = 1;
         public SQLiteConnection DataBase;
         public IEnumerable<Word> AllWordList;
         public IEnumerable<JpWord> AllJpWordList;
@@ -162,6 +164,12 @@ namespace ToastFish.Model.SqliteControl
                 Update.CommandText = $"ALTER TABLE Global ADD COLUMN autoLog INTEGER NOT NULL DEFAULT {AUTO_LOG}";
                 Update.ExecuteNonQuery();
             }
+            // #136 两段式记忆开关（默认开），幂等 ALTER
+            if (HeadTileList.Contains("recallMode") == false)
+            {
+                Update.CommandText = $"ALTER TABLE Global ADD COLUMN recallMode INTEGER NOT NULL DEFAULT {RECALL_MODE}";
+                Update.ExecuteNonQuery();
+            }
             // AI 短文门控累积列（2026-09-16 新增），幂等 ALTER
             if (HeadTileList.Contains("pendingEssayWords") == false)
             {
@@ -180,6 +188,7 @@ namespace ToastFish.Model.SqliteControl
             AUTO_PLAY = GlobalVariable[0].autoPlay;
             ENG_TYPE = GlobalVariable[0].EngType;
             AUTO_LOG = GlobalVariable[0].autoLog;
+            RECALL_MODE = GlobalVariable[0].recallMode;
         }
 
         public void UpdateGlobalConfig()
@@ -189,7 +198,8 @@ namespace ToastFish.Model.SqliteControl
                 $", currentBookName = '{TABLE_NAME}'" +
                 $", autoPlay = '{AUTO_PLAY}'" +
                 $", EngType = '{ENG_TYPE}' " +
-                $", autoLog = '{AUTO_LOG}'";
+                $", autoLog = '{AUTO_LOG}' " +
+                $", recallMode = '{RECALL_MODE}'";
             Update.ExecuteNonQuery();
         }
 
@@ -1626,6 +1636,8 @@ namespace ToastFish.Model.SqliteControl
         public int autoPlay { get; set; }
         public int EngType { get; set; }
         public int autoLog { get; set; }
+        /// <summary>#136 两段式记忆开关：1 = 开，0 = 关。</summary>
+        public int recallMode { get; set; }
         /// <summary>待生成 AI 短文的新词 wordRank（JSON 数组，2026-09-16 新增，见 CLAUDE.md #67）。</summary>
         public string pendingEssayWords { get; set; }
     }

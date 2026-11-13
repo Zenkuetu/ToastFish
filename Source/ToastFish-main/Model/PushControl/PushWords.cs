@@ -13,6 +13,7 @@ using ToastFish.Model.Log;
 using System.Diagnostics;
 using System.Reactive.Subjects;
 using ToastFish.Model.SM2plus;
+using ToastFish.Model.StudyLog;
 using System.Windows.Forms;
 using Microsoft.VisualBasic;
 using ToastFish.View;
@@ -70,8 +71,25 @@ namespace ToastFish.Model.PushControl
         /// <summary>测试模式：本轮学习结束后自动恢复数据库，不保存学习记录。</summary>
         public static volatile bool TestMode = false;
 
-        /// <summary>一个词在一轮学习里最多弹出几次（含第一次）。用户要求：始终答「不记得/模糊」也不该反复重来。</summary>
-        private const int MAX_ROUND_SHOWS = 3;
+        /// <summary>
+        /// 一个词在一轮学习里最多弹出几次（含第一次）。
+        /// #137（3.4.10）：从 3 改成 1 —— 有了两段式记忆后，第一下 1/2 展开释义、第二下才翻页，
+        /// 一个词一次弹窗里就能完成「回忆 + 确认」，本轮再弹一遍纯属重复（用户 m06000：没必要）。
+        /// 始终答「不记得/模糊」也不会在一轮里被反复追着问，剩下的留到下一轮。
+        /// </summary>
+        private const int MAX_ROUND_SHOWS = 1;
+
+        /// <summary>
+        /// #136 两步记忆：上一张卡按了 3/4 直接过关时置 true，
+        /// 等**下一张卡的单词窗**弹出来才在它上方飘 3 秒「单词+释义」（跨 pushCard 调用保留，所以要放字段）。
+        /// </summary>
+        private static bool _pendingWordPeek = false;
+
+        /// <summary>
+        /// #136 预览文字必须在**设标志的那一刻**就抓下来：预览是在下一张卡的 pushCard 里弹的，
+        /// 那时 CurrentWord 已经是新词，现算会显示成下一个词（用户实报缺陷）。
+        /// </summary>
+        private static string _pendingPeekText = null;
 
         /// <summary>
         /// 记一次「本轮第 N 次弹出」；已达 MAX_ROUND_SHOWS 返回 false（调用方跳过，留到下一轮）。
@@ -699,39 +717,94 @@ namespace ToastFish.Model.PushControl
             }
         }
 
+        /// <summary>#136 两段式记忆：一个按键 → SM2 分数（1 没印象 / 2 模糊 / 3 记住 / 4 牢记）</summary>
+        private static double ScoreOfAnswer(int answer)
+        {
+            switch (answer)
+            {
+                case 1: return Parameters.Again;
+                case 2: return Parameters.Hard;
+                case 3: return Parameters.Good;
+                case 4: return Parameters.Easy;
+                default: return -1;
+            }
+        }
+
+        /// <summary>
+        /// #136 过关预览用：单词 + 音标 + 释义 + 词组搭配（‖ 分隔，字段顺序与 ShowWordPopup 一致）。
+        /// 例句不再塞进预览 —— 预览只挂 3 秒，塞满例句会把浮层撑到左边甚至下方，反而看不清词组。
+        /// </summary>
+        private static string WordPeekText(Word w)
+        {
+            string phoneme = PhonemeOf(w);
+            string phonemePart = string.IsNullOrEmpty(phoneme) ? "" : "  /" + phoneme + "/";
+            string posTran = string.IsNullOrEmpty(w.pos) ? w.tranCN : w.pos + " " + w.tranCN;
+            string phrase = w.phrase ?? "";
+            string phraseCN = w.phraseCN ?? "";
+            return w.headWord + "‖" + phonemePart + "‖" + (posTran ?? "")
+                + "‖‖‖" + phrase + "‖" + phraseCN + "‖‖";
+        }
+
+        /// <summary>#136 异步播放（不阻塞弹窗），弹窗刚出现时用</summary>
+        private static void PlayWordSoundAsync(string saveName, string urlParam, string headWord)
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                List<string> mp3List = new List<string>();
+                mp3List.Add(saveName);
+                mp3List.Add(urlParam);
+                bool isOK = Download.DownloadMp3.PlayMp3(mp3List);
+                if (isOK == false)
+                {
+                    SpeechSynthesizer synth = new SpeechSynthesizer();
+                    synth.SpeakAsync(headWord);
+                }
+            });
+        }
+
+        /// <summary>#136 同步播放：重播当前词时用（等它播完再重弹，避免和下一次自动发音叠在一起）</summary>
+        private static void PlayWordSoundNow(string saveName, string urlParam, string headWord)
+        {
+            List<string> mp3List = new List<string>();
+            mp3List.Add(saveName);
+            mp3List.Add(urlParam);
+            bool isOK = Download.DownloadMp3.PlayMp3(mp3List);
+            if (isOK == false)
+            {
+                SpeechSynthesizer synth = new SpeechSynthesizer();
+                synth.SpeakAsync(headWord);
+            }
+        }
+
         public double pushCard(Card card, Cardstatus cardstatus, int numNewCards, int numLearingCards, int numReviewedCards)
         {
             Word CurrentWord = card.word;
-            int answer;
-            double result = -1;
-            bool isFinished = false;
             string word_pron, word_save_name;
             AccentVoice(CurrentWord.headWord, out word_save_name, out word_pron);
-            while (isFinished != true)
+
+            // #136 两段式记忆（默认开，托盘「参数设置 → 两步记忆」可关）：
+            //   第一段弹窗只有单词+音标；按 1/2 → 展开完整释义、再按一次（两次按键都计分）；
+            //   按 3/4 → 直接过关，下一张单词窗弹出时在它上方浮 3 秒「单词+释义」。
+            bool recallMode = Select.RECALL_MODE != 0;
+
+            while (true)
             {
+                bool showPreview = _pendingWordPeek;
+                string peekText = _pendingPeekText;
+                _pendingWordPeek = false;
+                _pendingPeekText = null;
+
                 // 先弹窗，再播语音
-                PushOneWordSM2(CurrentWord, cardstatus, numNewCards, numLearingCards, numReviewedCards);
+                PushOneWordSM2(CurrentWord, cardstatus, numNewCards, numLearingCards, numReviewedCards, recallMode);
+                if (showPreview)
+                    NotificationForm.ShowWordPreviewAbove(
+                        string.IsNullOrEmpty(peekText) ? WordPeekText(CurrentWord) : peekText,
+                        NotificationForm.TIMEOUT_PREVIEW);
 
                 if (Select.AUTO_PLAY != 0)
-                {
-                    // 异步播放，不阻塞弹窗
-                    string mp3_fs_name = word_save_name;
-                    string mp3_url_param = word_pron;
-                    string mp3_headWord = CurrentWord.headWord;
-                    ThreadPool.QueueUserWorkItem(_ =>
-                    {
-                        List<string> mp3List = new List<string>();
-                        mp3List.Add(mp3_fs_name);
-                        mp3List.Add(mp3_url_param);
-                        bool isOK = Download.DownloadMp3.PlayMp3(mp3List);
-                        if (isOK == false)
-                        {
-                            SpeechSynthesizer synth = new SpeechSynthesizer();
-                            synth.SpeakAsync(mp3_headWord);
-                        }
-                    });
-                }
+                    PlayWordSoundAsync(word_save_name, word_pron, CurrentWord.headWord);
 
+                int answer;
                 try
                 {
                     var task = this.ProcessToastNotificationRecitationSM2();
@@ -740,42 +813,47 @@ namespace ToastFish.Model.PushControl
                 catch (Exception e)
                 {
                     Debug.WriteLine(e.Message);
-                    return result;
+                    return -1;
                 }
-                if (answer == 1)
+
+                if (answer == 0)
                 {
-                    result = Parameters.Again;
-                    isFinished = true;
+                    // 「S」键或弹窗人间蒸发：重播并重弹当前词（旧行为）
+                    PlayWordSoundNow(word_save_name, word_pron, CurrentWord.headWord);
+                    continue;
                 }
-                else if (answer == 2)
+
+                if (recallMode && (answer == 1 || answer == 2))
                 {
-                    result = Parameters.Hard;
-                    isFinished = true;
-                }
-                else if (answer == 3)
-                {
-                    result = Parameters.Good;
-                    isFinished = true;
-                }
-                else if (answer == 4)
-                {
-                    result = Parameters.Easy;
-                    isFinished = true;
-                }
-                else if (answer == 0)
-                {
-                    List<string> replayMp3 = new List<string>();
-                    replayMp3.Add(word_save_name);
-                    replayMp3.Add(word_pron);
-                    bool isOK = Download.DownloadMp3.PlayMp3(replayMp3);
-                    if (isOK == false)
+                    // 第二阶段：释义已展开，再等一次按键；第二下按什么算什么
+                    int answer2 = 0;
+                    while (answer2 == 0)
                     {
-                        SpeechSynthesizer synth = new SpeechSynthesizer();
-                        synth.SpeakAsync(CurrentWord.headWord);
+                        PushOneWordSM2(CurrentWord, cardstatus, numNewCards, numLearingCards, numReviewedCards, false);
+                        try
+                        {
+                            answer2 = this.ProcessToastNotificationRecitationSM2().Result;
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.WriteLine(e.Message);
+                            return ScoreOfAnswer(answer);
+                        }
+                        if (answer2 == 0) PlayWordSoundNow(word_save_name, word_pron, CurrentWord.headWord);
                     }
+                    // 两次评分：第一下在这里先算（卡状态当场前进），第二下由调用方的 updateCard(返回值) 算并落库
+                    card.updateCard(ScoreOfAnswer(answer));
+                    return ScoreOfAnswer(answer2);
                 }
+
+                if (recallMode)
+                {
+                    // 3/4 直接过关：下一张卡上方补 3 秒预览 —— 文字此刻就定下来，别等下一张卡（#136 修订）
+                    _pendingPeekText = WordPeekText(CurrentWord);
+                    _pendingWordPeek = true;
+                }
+                return ScoreOfAnswer(answer);
             }
-            return result;
         }
 
         public static void RecitationSM2(Object wordtype)
@@ -843,7 +921,7 @@ namespace ToastFish.Model.PushControl
                 .ToList();
             List<Card> FinishedCardLst = new List<Card>();
 
-            // 本轮每个词已经弹出的次数（key=wordRank）：一个词一轮最多 MAX_ROUND_SHOWS 次
+            // 本轮每个词已经弹出的次数（key=wordRank）：一个词一轮最多 MAX_ROUND_SHOWS 次（#137 起 = 1 次）
             var roundShows = new Dictionary<int, int>();
             // 因达本轮上限而跳过的词 —— 必须落库，否则本轮 updateCard 的结果（status/间隔）全丢
             List<Card> LeftoverCardLst = new List<Card>();
@@ -1112,8 +1190,9 @@ namespace ToastFish.Model.PushControl
             while (LearningCardLst.Count != 0)
             {
                 Card Cardj = LearningCardLst[0];
-                // 保留「答错后本轮内立即重复弹出」（SM2 learning steps 依赖它），但一个词本轮一共最多
-                // 出现 MAX_ROUND_SHOWS 次（新词/复习词/学习中词三条路径都计入），超出就留到下一轮。
+                // #137：一个词本轮只出现一次（MAX_ROUND_SHOWS=1，新词/复习词/学习中词三条路径都计入），
+                // 剩下的（含刚答错、本该走 SM2 learning step 的）留到下一轮 —— 两段式弹窗已经在一次弹窗里
+                // 给了「先回忆、再看释义」的机会，本轮内再弹一遍只是重复。LeftoverCardLst 保证状态照旧落库。
                 if (!TryEnterRoundShow(roundShows, Cardj.word.wordRank))
                 {
                     LearningCardLst.RemoveAt(0);
@@ -1151,6 +1230,15 @@ namespace ToastFish.Model.PushControl
             Query.SyncCountTable();  // 同步 Count 表，确保进度计数实时准确
             Debug.WriteLine($"数据库更新完毕 @{DateTime.Now}");
 
+            // #133（3.4.10）：卡片已全部落库，立刻结算一次本轮成绩 ——
+            // 后面还有测验 / 微阅读（可能要几十秒，中途被杀的概率最高），先记一笔更安全。
+            // 结算会把 dateLastReviewed_bak 同步成 dateLastReviewed，所以下面再结算一次不会重复计数。
+            if (testTx == null)
+            {
+                try { StudyLogManager.FlushPendingStudyLog(); }
+                catch (Exception ex) { Debug.WriteLine("#133 结算学习日志失败: " + ex.Message); }
+            }
+
             FinishedCardLst.Sort((b, a) =>
             {
                 // compare a to b to get decending order
@@ -1176,6 +1264,15 @@ namespace ToastFish.Model.PushControl
             // 学后微阅读（2026-07-17 新增）：例句串读 + 抽查，异常不影响学习收尾
             try { pushWords.PushMiniReading(AllFinshedWordList, (List<Word>)Query.AllWordList, FinishedCardLst); }
             catch (Exception ex) { Debug.WriteLine("微阅读异常: " + ex.Message); }
+
+            // #133（3.4.10）：本轮结束就把成绩结算进 StudyLog。
+            // 原来只在托盘「退出」时写，程序常驻好几天不退出 → 仪表盘「累计学习词次」一直不变，
+            // 刷新仪表盘时也读不到今天的数字。PostLearnApply() 结算过会同步 bak，不会重复计数。
+            if (testTx == null)
+            {
+                try { StudyLogManager.FlushPendingStudyLog(); }
+                catch (Exception ex) { Debug.WriteLine("#133 结算学习日志失败: " + ex.Message); }
+            }
 
             pushWords.PushMessage("结束了！恭喜！");
 
@@ -1479,7 +1576,8 @@ namespace ToastFish.Model.PushControl
             ToastBridge.ShowMessage("ToastFish", WordPhonePosTran + "\n" + SentenceTran, 5000);
         }
 
-        public void PushOneWordSM2(Word CurrentWord, Cardstatus cardstatus, int numNewCards, int numLearingCards, int numReviewedCards)
+        /// <param name="brief">#136 两段式记忆第一段：只放单词和音标，词性释义/例句/词组一律留空</param>
+        public void PushOneWordSM2(Word CurrentWord, Cardstatus cardstatus, int numNewCards, int numLearingCards, int numReviewedCards, bool brief = false)
         {
             // // History.Clear()
             string Phoneme = PhonemeOf(CurrentWord);
@@ -1492,7 +1590,10 @@ namespace ToastFish.Model.PushControl
             string phraseCN = (CurrentWord.phraseCN != null) ? CurrentWord.phraseCN : "";
 
             // 用 ‖ 分隔各段落，弹窗内分别渲染不同样式
-            string displayText = word + "‖" + phoneme + "‖" + posTran + "‖" + sentence + "‖" + sentenceCN + "‖" + phrase + "‖" + phraseCN;
+            // #136 brief：索引 2~6 全空 → ShowWordPopup 只画「单词 + 音标」两块
+            string displayText = brief
+                ? word + "‖" + phoneme + "‖‖‖‖‖"
+                : word + "‖" + phoneme + "‖" + posTran + "‖" + sentence + "‖" + sentenceCN + "‖" + phrase + "‖" + phraseCN;
 
             string HeadTile;
             if (cardstatus == Cardstatus.Reviewed)
@@ -1503,6 +1604,10 @@ namespace ToastFish.Model.PushControl
                 HeadTile = "新学·阶段" + (int)cardstatus + "  |  新词:" + numNewCards + "  学习中:" + numLearingCards + "  待复习:" + numReviewedCards;
             else
                 HeadTile = "重学·阶段" + ((int)cardstatus - (int)Cardstatus.Step2) + "  |  新词:" + numNewCards + "  学习中:" + numLearingCards + "  待复习:" + numReviewedCards;
+
+            // #136 两段式记忆第一段：提示这两组键分别会做什么
+            if (brief)
+                HeadTile = "Alt+1/2 看释义 · Alt+3/4 直接过   |   " + HeadTile;
 
             // 非阻塞显示弹窗
             NotificationForm.ShowWordPopup(
