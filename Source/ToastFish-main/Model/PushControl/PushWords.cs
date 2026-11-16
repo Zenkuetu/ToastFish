@@ -202,7 +202,8 @@ namespace ToastFish.Model.PushControl
             {
                 Task<int> t = ToastBridge.ShowInteractive(
                     "AI 短文",
-                    "已累计 " + pendingCount + " 个新词，是否在本轮结束时生成 AI 短文？",
+                    // #141：文案改准 —— 生成不是等到整轮结束，而是新词学完就在后台跑，测验完直接读。
+                    "已累计 " + pendingCount + " 个新词，是否在本轮生成 AI 短文？（新词学完即后台生成，测验结束后直接阅读）",
                     new[] { "生成短文", "暂不生成" }, 30000);
 
                 if (!t.Wait(35000)) return false;   // 弹窗未正常返回：兜底不生成

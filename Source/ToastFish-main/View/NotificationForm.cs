@@ -36,6 +36,10 @@ namespace ToastFish.View
 
         private static bool _isHidden = false;
 
+        /// <summary>#140：当前弹窗是不是「学后短文」（信息页 / 阅读页 / 测验页）。
+        /// Alt+Q 落在这类弹窗上时只提示「按 Alt+1」，绝不能把它关掉。</summary>
+        internal static bool EssayPopupActive;
+
         /// <summary>
         /// #94（3.4.1）：当前是否还有活着的弹窗（被只隐藏、没关闭的也算）。
         /// 学习线程用它判断"我在等的那张弹窗是不是已经被别人关掉了"。
@@ -819,10 +823,22 @@ namespace ToastFish.View
             }));
         }
 
+        // #140：连按 Alt+Q 时同一条提示会一层层叠在弹窗上方，这里做个 1.5 秒去重
+        private static string _lastMsgText;
+        private static DateTime _lastMsgAt = DateTime.MinValue;
+        private static readonly object _msgLock = new object();
+
         public static void ShowMessage(string title, string message, int autoDismissMs = TIMEOUT_MSG)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) return;
+
+            lock (_msgLock)
+            {
+                if (message == _lastMsgText && (DateTime.Now - _lastMsgAt).TotalMilliseconds < 1500) return;
+                _lastMsgText = message;
+                _lastMsgAt = DateTime.Now;
+            }
 
             dispatcher.BeginInvoke(new Action(() =>
             {
@@ -1614,6 +1630,11 @@ namespace ToastFish.View
             _current?.Close();
             _current?.Dispose();
 
+            // #140：回调只允许生效一次。旧版这里被别的弹窗顶掉（FormClosed）时什么都不做，
+            // 学习线程的 done.WaitOne() 就永远醒不过来 —— 整轮卡死、Alt+Q 连按还会叠出新一轮。
+            bool finished = false;
+            Action<int> finish = r => { if (finished) return; finished = true; callback(r); };
+
             int formW = 480, pad = 24;
             int cw = formW - pad * 2;
 
@@ -1710,7 +1731,7 @@ namespace ToastFish.View
             if (timeoutMs > 0)
             {
                 phase1Timer = new System.Windows.Forms.Timer { Interval = timeoutMs };
-                phase1Timer.Tick += (s, e) => { phase1Timer.Stop(); form.Close(); callback(-1); };
+                phase1Timer.Tick += (s, e) => { phase1Timer.Stop(); form.Close(); finish(-1); };
                 phase1Timer.Start();
             }
 
@@ -1721,8 +1742,20 @@ namespace ToastFish.View
                 if (_current == form) _current = null;
                 _isHidden = false;
                 form.Dispose();
+                EssayPopupActive = false;
+                // #140：被顶掉 / 被别处关闭时也要把等待线程放出来（进第二阶段时 phase2Entered 已为 true，不能重复回调）
+                if (!phase2Entered) finish(-1);
             };
 
+            // #140：这是「等用户按 Alt+1」的常驻弹窗，必须标记成交互弹窗，
+            // 否则 ShowMessage 会把它当成普通弹窗直接 Close 掉（按一次 Alt+Q 就能毁掉整个短文流程）。
+            form.Tag = new PopupState
+            {
+                Timer = phase1Timer, TotalMs = timeoutMs, StartedAt = DateTime.Now,
+                PausedRemainingMs = -1, Interactive = true
+            };
+
+            EssayPopupActive = true;
             _isHidden = false;
             _current = form;
             form.Show();
@@ -1740,6 +1773,10 @@ namespace ToastFish.View
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(-1); return; }
+
+            // #140：回调只生效一次；被顶掉时也要放行学习线程（否则 done.WaitOne() 永久阻塞）
+            bool finished = false;
+            Action<int> finish = r => { if (finished) return; finished = true; callback(r); };
 
             dispatcher.BeginInvoke(new Action(() =>
             {
@@ -2059,7 +2096,7 @@ namespace ToastFish.View
                 Action startQuiz = () =>
                 {
                     if (quizIdx >= 0) return;
-                    if (!hasQuiz) { form.Close(); callback(0); return; }
+                    if (!hasQuiz) { form.Close(); finish(0); return; }
                     quizIdx = 0;
                     // 测验控件一律在 1x 下新建（#128）：放大态下新建会让宽度沿用放大后的值，
                     // 松开 Alt 时又只还原旧控件，文字就会越过窗口右边缘。
@@ -2112,7 +2149,7 @@ namespace ToastFish.View
                             {
                                 if (closed) return; closed = true;
                                 answersSink?.Invoke(BuildChoiceAnswersJson(picks, questions));
-                                form.Close(); callback((ac << 16) | cc);
+                                form.Close(); finish((ac << 16) | cc);
                             };
                             closeIntensive = doClose;   // 精读走完也回到这里收尾
 
@@ -2408,12 +2445,19 @@ namespace ToastFish.View
                     {
                         timer.Stop();
                         answersSink?.Invoke(BuildChoiceAnswersJson(picks, questions));
-                        callback((attemptedCnt << 16) | correctCnt);
+                        finish((attemptedCnt << 16) | correctCnt);
                         form.Close();
                     };
                     timer.Start();
-                    form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1 };
                 }
+
+                // #140：短文窗必须标记成交互弹窗，否则 Alt+Q 的提示消息会顺手把它 Close 掉
+                form.Tag = new PopupState
+                {
+                    Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now,
+                    PausedRemainingMs = -1, Interactive = true
+                };
+                EssayPopupActive = true;
 
                 form.FormClosed += (s, e) =>
                 {
@@ -2422,6 +2466,9 @@ namespace ToastFish.View
                     if (_current == form) _current = null;
                     _isHidden = false;
                     form.Dispose();
+                    EssayPopupActive = false;
+                    // #140：窗口被别处关掉时补一次回调，把 WaitOne 的线程放出来
+                    if (!finished) finish(-1);
                 };
 
                 // Shown 时句柄已建、内容已渲染，按真实高度做一次最终布局校正

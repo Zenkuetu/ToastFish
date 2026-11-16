@@ -674,66 +674,108 @@ namespace ToastFish
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ToastFish");
         }
 
+        // #140：Alt+Q 整条链路都跑在 UI 线程（HotKey.cs:71-89 用 ComponentDispatcher 消息过滤器同步回调），
+        // 旧版在这里 Thread.Sleep 最多 6+3 秒等上一轮退出 —— 连按 Alt+Q 会把界面和鼠标冻成一片，
+        // 而且被卡住的短文线程和新起的这一轮叠着跑（听到读音、冒出单词窗）。现在热键回调只做即时判断，
+        // 真正的「中断 + 等待 + 重启」丢后台线程，重启完成再回 UI 线程。
+        private static int _restarting;                        // 0 = 空闲，1 = 正在中断重启
+        private static readonly object _roundStartLock = new object();
+        private static DateTime _lastRoundStart = DateTime.MinValue;
+
         private void Begin_Click(object sender, EventArgs e)
         {
             // 惊喜复习进行中时不允许开始学习，避免热键冲突
             if (SurpriseReviewManager.IsSurpriseInProgress)
                 return;
 
-            // 学习已在运行中：若弹窗被隐藏（Alt+H 手动隐藏，或单词/测验弹窗超时自动收起），
-            // 由 Alt+Q 重新显示它、继续当前进度；确实没有可恢复的弹窗时给一句提示，避免"按了没反应"。
             if (PushWords.IsLearningActive)
             {
-                // 还活着的弹窗（含 Alt+H 隐藏、超时收起）→ 重新显示，继续这一轮
+                // 弹窗被 Alt+H 隐藏 / 超时收起 → 重新显示，继续这一轮
                 if (NotificationForm.ResumeCurrentPopup())
                     return;
 
-                // #94（3.4.1）自愈：弹窗其实已经没了（被提示消息顶掉 / 被强行关闭），
-                // 等待热键的线程会永久阻塞，只能重启软件。这里主动中断这一轮，
-                // 等线程退出（finally 会把 IsLearningActive 复位）后再照常开新一轮。
+                // #94（3.4.1）自愈：弹窗其实已经没了 → 后台中断这一轮，收尾完自动开新一轮。
+                // #140：等待绝不能放在 UI 线程上做。
                 if (!NotificationForm.HasAnyLivePopup)
+                {
+                    AbortAndRestartInBackground();
+                    return;
+                }
+
+                // 弹窗还活着（单词窗 / 短文窗 / 测验窗）→ 用户正看着它，只给一句提示，绝不动这张窗
+                if (NotificationForm.EssayPopupActive)
+                    NotificationForm.ShowMessage("ToastFish", "学后短文正在进行，按 Alt+1 继续阅读 / 开始测验");
+                else
+                    NotificationForm.ShowMessage("ToastFish", "本轮复习仍在进行中，请稍候…");
+                return;
+            }
+
+            StartRoundInBackground();
+        }
+
+        /// <summary>#140：把「中断上一轮 + 等线程收尾 + Abort」挪出 UI 线程，连按只用第一次生效。</summary>
+        private void AbortAndRestartInBackground()
+        {
+            if (Interlocked.CompareExchange(ref _restarting, 1, 0) != 0)
+                return;
+
+            NotificationForm.ShowMessage("ToastFish", "上一轮已中断，正在重新开始…");
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
                 {
                     PushWords.RequestAbortRound();
                     for (int i = 0; i < 60 && PushWords.IsLearningActive; i++)
                         Thread.Sleep(100);
 
+                    // 等了 6 秒还没收尾：旧线程已经不在了（异常退出 / 卡在别的等待里，例如被顶掉的短文窗），
+                    // 强行复位标志，否则用户永远开不了新一轮。RoundAbort 仍为 true，残留线程醒来会立刻退出。
                     if (PushWords.IsLearningActive)
-                    {
-                        // 等了 6 秒还没收尾：旧线程已经不在了（异常退出 / 卡在别的等待里），
-                        // 强行复位标志，否则用户永远开不了新一轮（旧版只能重启软件）。
-                        // RoundAbort 仍为 true，残留线程一旦醒来会立刻退出，不会长期和新一轮并存。
                         PushWords.IsLearningActive = false;
-                        NotificationForm.ShowMessage("ToastFish", "上一轮已中断，正在重新开始…");
-                    }
+
+                    try { thread.Abort(); } catch { }
                 }
-                else if (NotificationForm.Current == null)
-                {
-                    NotificationForm.ShowMessage("ToastFish", "本轮复习仍在进行中，请稍候…");
-                    return;
-                }
-                else
-                {
-                    // 弹窗存在但不可恢复（不是隐藏态）→ 说明用户正看着它，给一句提示即可
-                    NotificationForm.ShowMessage("ToastFish", "本轮复习仍在进行中，请稍候…");
-                    return;
-                }
+                catch (Exception ex) { Debug.WriteLine("#140 中断上一轮失败: " + ex.Message); }
+                finally { Interlocked.Exchange(ref _restarting, 0); }
+
+                // 回 UI 线程按正常路径开新一轮
+                try { Dispatcher.BeginInvoke(new Action(() => Begin_Click(null, EventArgs.Empty))); }
+                catch { }
+            });
+        }
+
+        /// <summary>#140：起新一轮也挪出 UI 线程（要等旧线程 Abort 完成，最多 3 秒）。</summary>
+        private void StartRoundInBackground()
+        {
+            lock (_roundStartLock)
+            {
+                // 连按 Alt+Q 时不让多轮叠在一起
+                if ((DateTime.Now - _lastRoundStart).TotalMilliseconds < 2000) return;
+                _lastRoundStart = DateTime.Now;
             }
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { StartRound(); }
+                catch (Exception ex) { Debug.WriteLine("#140 开始新一轮失败: " + ex.Message); }
+            });
+        }
+
+        private void StartRound()
+        {
             PushWords.RoundAbort = false;   // #94：新一轮开始前清掉上一轮的中断标记
 
-            if (!System.IO.Directory.Exists("Log"))  {
+            if (!System.IO.Directory.Exists("Log"))
                 System.IO.Directory.CreateDirectory("Log");
-            }
-           // System.IO.Directory.CreateDirectory("Log");
 
             var state = thread.ThreadState;
-
             WordType Words = new WordType();
             Words.Number = Select.WORD_NUMBER;
 
+            // #94：旧版是 while (状态 != Aborted) 无限等。线程如果早已正常结束（Stopped），
+            // Abort() 是空操作、状态永远不会变成 Aborted → 这里会永久卡住。
             if (state == System.Threading.ThreadState.WaitSleepJoin || state == System.Threading.ThreadState.Stopped)
             {
-                // #94：旧版是 while (状态 != Aborted) 无限等。线程如果早已正常结束（Stopped），
-                // Abort() 是空操作、状态永远不会变成 Aborted → 这里会永久卡住。
                 try { thread.Abort(); } catch { }
                 for (int i = 0; i < 30; i++)
                 {
@@ -742,30 +784,19 @@ namespace ToastFish
                         break;
                     Thread.Sleep(100);
                 }
-                if(Select.TABLE_NAME == "Goin")
-                    thread = new Thread(new ParameterizedThreadStart(PushGoinWords.OrderGoin));
-                else if(Select.TABLE_NAME == "StdJp_Mid")
-                    thread = new Thread(new ParameterizedThreadStart(PushJpWords.Recitation));
-                //else if (Select.TABLE_NAME == "自定义英语")
-                //    thread = new Thread(new ParameterizedThreadStart(PushWords.Recitation));
-                else
-                    thread = new Thread(new ParameterizedThreadStart(PushWords.RecitationSM2));
+            }
 
-                thread.Start(Words);
-            }
-            else
-            {
-                if (Select.TABLE_NAME == "Goin")
-                    thread = new Thread(new ParameterizedThreadStart(PushGoinWords.OrderGoin));
-                else if (Select.TABLE_NAME == "StdJp_Mid")
-                    thread = new Thread(new ParameterizedThreadStart(PushJpWords.Recitation));
-                //else if (Select.TABLE_NAME == "自定义英语")
-                //    thread = new Thread(new ParameterizedThreadStart(PushWords.Recitation));
-                else
-                    thread = new Thread(new ParameterizedThreadStart(PushWords.RecitationSM2));
-                
-                thread.Start(Words);
-            }
+            thread = CreateRoundThread();
+            thread.Start(Words);
+        }
+
+        private static Thread CreateRoundThread()
+        {
+            if (Select.TABLE_NAME == "Goin")
+                return new Thread(new ParameterizedThreadStart(PushGoinWords.OrderGoin));
+            if (Select.TABLE_NAME == "StdJp_Mid")
+                return new Thread(new ParameterizedThreadStart(PushJpWords.Recitation));
+            return new Thread(new ParameterizedThreadStart(PushWords.RecitationSM2));
         }
 
         private void SetNumber_Click(object sender, EventArgs e)
