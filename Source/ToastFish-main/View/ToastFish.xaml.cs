@@ -42,7 +42,8 @@ namespace ToastFish
        //HotKey _hotKey0, _hotKey1, _hotKey2, _hotKey3, _hotKey4;
         public MainWindow()
         {
-            Form_Load();
+            // #142：单实例判定已前移到 App.OnStartup（互斥体），二次启动根本进不到这里 ——
+            // 旧 Form_Load 扫进程名的位置太晚，那时数据库快照/备份已经跑过了
             InitializeComponent();
             PushWords.UIDispatcher = this.Dispatcher;
             DataContext = Vm;
@@ -119,22 +120,8 @@ namespace ToastFish
             }           
         }
 
-        private void Form_Load()
-
-        {
-            //获取当前活动进程的模块名称
-            string moduleName = Process.GetCurrentProcess().MainModule.ModuleName;
-            //返回指定路径字符串的文件名
-            string processName = System.IO.Path.GetFileNameWithoutExtension(moduleName);
-            //根据文件名创建进程资源数组
-            Process[] processes = Process.GetProcessesByName(processName);
-            //如果该数组长度大于1，说明多次运行
-            if (processes.Length > 1)
-            {
-                System.Windows.Forms.MessageBox.Show("程序已经在运行了，不能运行两次。\n如果右下角软件已经退出，请在任务管理器中结束ToastFish任务。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);//弹出提示信息
-                this.Close();//关闭当前窗体
-            }
-        }
+        // #142：原 Form_Load()（Process.GetProcessesByName 判重 + MessageBox）已删除，
+        // 判重改为 App.OnStartup 开头的命名互斥体，二次启动在碰数据库之前就退出
 
 
         private void SetNotifyIcon()
