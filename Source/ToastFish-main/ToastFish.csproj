@@ -153,6 +153,7 @@
     <Compile Include="Model\PushControl\PushGoinWords.cs" />
     <Compile Include="Model\PushControl\PushJpWords.cs" />
     <Compile Include="Model\PushControl\PushWords.cs" />
+    <Compile Include="Model\PushControl\PassagePractice.cs" />
     <Compile Include="Model\PushControl\ToastBridge.cs" />
     <Compile Include="Model\PushControl\WordType.cs" />
     <Compile Include="Model\PushControl\GamepadMonitor.cs" />

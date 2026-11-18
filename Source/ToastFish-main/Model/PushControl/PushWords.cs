@@ -147,8 +147,15 @@ namespace ToastFish.Model.PushControl
         private static Task _cloze4PreFetchTask = null;
         private static List<Word> _cloze4PreFetchWords = null;
         private static string _cloze4PreFetchError = null;
+        // === 英译汉（考研 Part C）预生成（2026-11-18 / #143） ===
+        private static Model.Ai.TransPassage _transPreFetchResult = null;
+        private static Task _transPreFetchTask = null;
+        private static List<Word> _transPreFetchWords = null;
+        private static string _transPreFetchError = null;
         /// <summary>预生成时决定题型，PushMiniReading 据此取用对应结果。</summary>
         private static bool _preFetchIsCloze = false;
+        /// <summary>#143：本轮预生成的是英译汉（考研三种题型之一）。</summary>
+        private static bool _preFetchIsTrans = false;
 
         /// <summary>
         /// 本轮是否跳过 AI 短文展示（2026-09-16，见 CLAUDE.md #67）。
@@ -474,6 +481,35 @@ namespace ToastFish.Model.PushControl
                     attempted, correct, modelMode, answersJson);
             }
             catch (Exception ex) { Debug.WriteLine("SaveCloze4Log: " + ex.Message); }
+        }
+
+        /// <summary>持久化英译汉（考研 Part C）到 EssayLog 表（2026-11-18 / #143）。</summary>
+        private static void SaveTransLog(List<Word> transWords, Model.Ai.TransPassage trans,
+            int attempted, int correct, string answersJson = null)
+        {
+            if (TestMode) return; // 测试模式不走独立连接写入
+            try
+            {
+                var jss = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var wordsArr = transWords != null ? transWords.Select(w => w.headWord).ToList() : new List<string>();
+                string wordsJson = jss.Serialize(wordsArr);
+                string createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                int modelMode = Model.Ai.AiConfig.ModelMode;
+
+                // questions 列复用：type=trans 标记题型，items 是 5 句（原文 / 参考译文 / 采分点）
+                var itemsData = trans.Items.Select(it => new {
+                    s = it.Sentence,
+                    refer = it.Reference,
+                    points = it.Points
+                }).ToList();
+                var transData = new { type = "trans", items = itemsData };
+                string questionsJson = jss.Serialize(transData);
+
+                Select.InsertEssayLog(createdAt, Select.TABLE_NAME, wordsArr.Count,
+                    wordsJson, trans.En, "", questionsJson,
+                    attempted, correct, modelMode, answersJson);
+            }
+            catch (Exception ex) { Debug.WriteLine("SaveTransLog: " + ex.Message); }
         }
 
         /// <summary>
@@ -1046,11 +1082,59 @@ namespace ToastFish.Model.PushControl
                     foreach (var w in fetchWords) hws.Add(w.headWord);
                     var captureWords = fetchWords; // 闭包捕获
 
-                    // 50/50 随机决定题型，只启动一种预生成
-                    bool doClozePrefetch = (new SafeRandom().Next(2) == 1);
+                    // 随机决定题型，只启动一种预生成（#143：考研三种轮换 essay/cloze4/trans，非考研仍两种）
+                    bool kaoyanBook = Select.TABLE_NAME.StartsWith("KaoYan");
+                    bool doClozePrefetch = false, doTransPrefetch = false;
+                    if (kaoyanBook)
+                    {
+                        int kind = new SafeRandom().Next(3);
+                        doClozePrefetch = (kind == 1);
+                        doTransPrefetch = (kind == 2);
+                    }
+                    else
+                    {
+                        doClozePrefetch = (new SafeRandom().Next(2) == 1);
+                    }
                     _preFetchIsCloze = doClozePrefetch;
+                    _preFetchIsTrans = doTransPrefetch;
 
-                    if (doClozePrefetch)
+                    if (doTransPrefetch)
+                    {
+                        // 考研：Part C 英译汉（短文 + 5 句划线翻译）
+                        var transTask = new Task(() =>
+                        {
+                            try
+                            {
+                                Model.Ai.TransPassage tr; string terr;
+                                bool ok = Model.Ai.EssayGenerator.TryGenerateTrans(hws, out tr, out terr);
+                                lock (_essayPreFetchLock)
+                                {
+                                    _transPreFetchResult = ok ? tr : null;
+                                    _transPreFetchWords = ok ? captureWords : null;
+                                    _transPreFetchError = ok ? null : terr;
+                                }
+                                try { System.IO.File.AppendAllText(
+                                    System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "Resources", "ai_diag.log"),
+                                    DateTime.Now + " TRANS " + (ok
+                                        ? ("OK items=" + tr.Items.Count + " en=" + (tr.En != null ? tr.En.Length : 0) + "chars")
+                                        : ("FAIL err=" + (terr ?? "null") + " diag=" + (Model.Ai.EssayGenerator.LiveDiag ?? "null"))) + "\n"); } catch { }
+                                // 生成成功 → 清空累积新词；失败/超时保留，下轮继续累加
+                                if (ok) Select.ClearPendingEssayWords();
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.WriteLine("AI 英译汉预生成异常: " + ex.Message);
+                                lock (_essayPreFetchLock)
+                                {
+                                    _transPreFetchResult = null; _transPreFetchWords = null;
+                                    _transPreFetchError = ex.Message;
+                                }
+                            }
+                        });
+                        lock (_essayPreFetchLock) { _transPreFetchTask = transTask; }
+                        transTask.Start();
+                    }
+                    else if (doClozePrefetch)
                     {
                         bool kaoyan = Select.TABLE_NAME.StartsWith("KaoYan");
                         if (kaoyan)
@@ -1903,8 +1987,115 @@ namespace ToastFish.Model.PushControl
 
                 // 读取预生成阶段决定的题型标志
                 bool useCloze = _preFetchIsCloze;
+                bool useTrans = _preFetchIsTrans;
                 _preFetchIsCloze = false; // 复位
+                _preFetchIsTrans = false;
 
+                if (useTrans)
+                {
+                    // === 考研 Part C 英译汉（短文 + 5 句划线翻译）===
+                    Model.Ai.TransPassage trans = null;
+                    List<Word> transWords = null;
+                    Task transTask = null;
+                    lock (_essayPreFetchLock)
+                    {
+                        transTask = _transPreFetchTask;
+                        _transPreFetchTask = null;
+                        if (transTask == null)
+                        {
+                            trans = _transPreFetchResult;
+                            transWords = _transPreFetchWords;
+                            _transPreFetchResult = null;
+                            _transPreFetchWords = null;
+                        }
+                    }
+                    // Wait OUTSIDE lock — 防止死锁
+                    if (transTask != null)
+                    {
+                        if (!transTask.IsCompleted)
+                        {
+                            PushMessage("AI 正在生成英译汉...");
+                            int elapsed = 0;
+                            bool asked = false;
+                            const int ABORT_TIMEOUT_MS = 180000;
+                            while (!transTask.IsCompleted)
+                            {
+                                if (transTask.Wait(5000)) break;
+                                elapsed += 5000;
+                                string t = Model.Ai.EssayGenerator.LiveThinking;
+                                if (!string.IsNullOrEmpty(t))
+                                {
+                                    string s = t.Replace('\n', ' ').Replace('\r', ' ');
+                                    if (s.Length > 80) s = "…" + s.Substring(s.Length - 80);
+                                    PushMessage("AI 思考: " + s);
+                                }
+                                if (!asked && elapsed >= ABORT_TIMEOUT_MS)
+                                {
+                                    asked = true;
+                                    if (AskContinueOrAbort())
+                                    {
+                                        PushMessage("已继续等待 AI 生成...");
+                                        continue;
+                                    }
+                                    Model.Ai.EssayGenerator.AbortActiveRequest();
+                                    string reason = "生成超时（>180 秒），用户终止";
+                                    string diag = Model.Ai.EssayGenerator.LiveDiag;
+                                    if (!string.IsNullOrEmpty(diag)) reason += " " + diag;
+                                    lock (_essayPreFetchLock)
+                                    {
+                                        if (_transPreFetchResult == null) _transPreFetchError = reason;
+                                    }
+                                    try { System.IO.File.AppendAllText(
+                                        System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "Resources", "ai_diag.log"),
+                                        DateTime.Now + "\nTRANS " + reason + "\n"); } catch { }
+                                    PushMessage("已停止本次 AI 生成");
+                                    break;
+                                }
+                            }
+                        }
+                        lock (_essayPreFetchLock)
+                        {
+                            trans = _transPreFetchResult;
+                            transWords = _transPreFetchWords;
+                            _transPreFetchResult = null;
+                            _transPreFetchWords = null;
+                        }
+                    }
+
+                    if (trans == null)
+                    {
+                        string err = _transPreFetchError ?? Model.Ai.EssayGenerator.LiveError;
+                        string msg = "AI 生成失败";
+                        if (!string.IsNullOrEmpty(err)) msg += ": " + err;
+                        try { System.IO.File.AppendAllText(
+                            System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "Resources", "ai_diag.log"),
+                            DateTime.Now + "\nTRANS " + msg + "\n"); } catch { }
+                        PushMessage(msg); Thread.Sleep(6000);
+                    }
+                    _transPreFetchError = null;
+
+                    if (trans != null)
+                    {
+                        using (var done = new ManualResetEvent(false))
+                        {
+                            int transResult = 0;
+                            string transAnswersJson = "[]";
+                            NotificationForm.ShowEssayPopup(
+                                trans.En, "",
+                                transWords != null ? transWords.Select(w => w.headWord).ToList() : new List<string>(),
+                                null, null,
+                                r => { transResult = r; done.Set(); },
+                                0, json => { transAnswersJson = json; },
+                                null, trans.Items, true);
+                            done.WaitOne();
+                            int attempted = (transResult >> 16) & 0xFFFF;
+                            int correct = transResult & 0xFFFF;
+                            SaveTransLog(transWords, trans, attempted, correct, transAnswersJson);
+                        }
+                        return;
+                    }
+                    // 英译汉失败 → fall through 到例句串读
+                }
                 if (useCloze)
                 {
                     bool _kaoyan = Select.TABLE_NAME.StartsWith("KaoYan");

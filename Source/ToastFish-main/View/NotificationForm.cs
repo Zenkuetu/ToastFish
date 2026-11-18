@@ -1051,7 +1051,7 @@ namespace ToastFish.View
         }
 
         public static Task<int> ShowWithButtons(string title, string message,
-            string[] buttonLabels, int timeoutMs = TIMEOUT_DIALOG)
+            string[] buttonLabels, int timeoutMs = TIMEOUT_DIALOG, bool vertical = false)
         {
             var tcs = new TaskCompletionSource<int>();
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
@@ -1077,16 +1077,19 @@ namespace ToastFish.View
 
                 // 1) 先量按钮：文字宽 + 左右内边距，最少 96
                 var btnW = new int[buttonLabels.Length];
-                int rowW = 0;
+                int rowW = 0, maxBtnW = 0;
                 for (int i = 0; i < buttonLabels.Length; i++)
                 {
                     btnW[i] = Math.Max(96, TextRenderer.MeasureText(buttonLabels[i], btnFont).Width + 30);
                     rowW += btnW[i];
+                    if (btnW[i] > maxBtnW) maxBtnW = btnW[i];
                 }
                 rowW += BtnGap * Math.Max(0, buttonLabels.Length - 1);
 
-                // 2) 窗体宽度：默认 440，按钮排不下就加宽
-                int formW = Math.Max(440, rowW + PadX * 2);
+                // 2) 窗体宽度：默认 440，按钮排不下就加宽（竖排时只需容下最宽的那个按钮）
+                int formW = vertical
+                    ? Math.Max(460, maxBtnW + PadX * 2)
+                    : Math.Max(440, rowW + PadX * 2);
                 int contentW = formW - PadX * 2;
 
                 // 3) 再量正文高度（AutoSize=false + 显式尺寸，才能真正把整段画出来）
@@ -1098,7 +1101,13 @@ namespace ToastFish.View
                 int titleTop = 10;
                 int bodyTop = titleTop + titleH + 6;
                 int btnY = bodyTop + bodyH + 18;
-                int formH = btnY + BtnH + 16;
+                // #144：竖排选题（Alt+R 短文练习）——一行一个按钮、占满内容宽度，
+                // 比横排 5 个窄按钮好点，也不会被 96px 最小宽截断标签。
+                int btnHeight = vertical ? 40 : BtnH;
+                int btnVGap = vertical ? 8 : BtnGap;
+                int formH = vertical
+                    ? btnY + buttonLabels.Length * (btnHeight + btnVGap) - btnVGap + 16
+                    : btnY + BtnH + 16;
 
                 var form = new PopupForm(formW, formH, title, font: bodyFont, margin: 16);
 
@@ -1135,8 +1144,8 @@ namespace ToastFish.View
                     var btn = new Button
                     {
                         Text = buttonLabels[i],
-                        Location = new Point(btnX, btnY),
-                        Size = new Size(btnW[i], BtnH),
+                        Location = new Point(vertical ? PadX : btnX, vertical ? btnY + i * (btnHeight + btnVGap) : btnY),
+                        Size = new Size(vertical ? contentW : btnW[i], btnHeight),
                         BackColor = Color.FromArgb(51, 51, 51),
                         ForeColor = Color.White,
                         FlatStyle = FlatStyle.Flat,
@@ -1596,7 +1605,9 @@ namespace ToastFish.View
             Action<int> callback, int timeoutMs = TIMEOUT_READING,
             Action<string> answersSink = null,
             List<Model.Ai.LongSentence> longSentences = null,
-            List<Model.Ai.TransItem> translations = null)
+            List<Model.Ai.TransItem> translations = null,
+            bool startAtTranslation = false,
+            string titleOverride = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(-1); return; }
@@ -1613,7 +1624,7 @@ namespace ToastFish.View
 
                 // 无 Word 列表（回退）：直接进入 Phase 2（无测验）
                 ShowEssayContent(essayEN, essayCN, highlightWords, null, callback, timeoutMs, answersSink,
-                    longSentences, translations);
+                    longSentences, translations, startAtTranslation, titleOverride);
             }));
         }
 
@@ -1769,7 +1780,9 @@ namespace ToastFish.View
             List<string> highlightWords, List<Model.Ai.EssayQuestion> questions,
             Action<int> callback, int timeoutMs, Action<string> answersSink = null,
             List<Model.Ai.LongSentence> longSentences = null,
-            List<Model.Ai.TransItem> translations = null)
+            List<Model.Ai.TransItem> translations = null,
+            bool startAtTranslation = false,
+            string titleOverride = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
             if (dispatcher == null) { callback(-1); return; }
@@ -1794,7 +1807,8 @@ namespace ToastFish.View
                 var fontQuizB = new Font("Microsoft YaHei UI", 10, FontStyle.Bold);
                 var fontSmall = new Font("Microsoft YaHei UI", 9, FontStyle.Regular);
 
-                string title = "学后 AI 短文 — 在文章里认出刚学的词";
+                // #144：短文练习的标题要带「短文练习 · 出处」，学习流程仍用原标题
+                string title = titleOverride ?? "学后 AI 短文 — 在文章里认出刚学的词";
                 int hTitle = MeasureH(title, fontTitle, cw);
                 int hPassageMeasured = MeasureH(essayEN, fontSent, cw - 28);
                 int panelH_reading = 70;   // 阅读阶段底部按钮面板（开始测验 + 显示翻译）
@@ -2432,9 +2446,13 @@ namespace ToastFish.View
                 btnQuiz.Click += (s, e) => startQuiz();
 
                 // ALT+1 热键开始测验（Phase 2 独立注册，Phase 1 的热键已随 form 关闭释放）
+                // #143：直入英译汉时没有测验，Alt+1 会把窗口关掉 —— 这种模式不订阅
                 IDisposable quizHotkey = null;
-                try { quizHotkey = Model.PushControl.PushWords.HotKeytObservable.Subscribe(
-                    key => { if (key == "1") startQuiz(); }); } catch { }
+                if (!startAtTranslation)
+                {
+                    try { quizHotkey = Model.PushControl.PushWords.HotKeytObservable.Subscribe(
+                        key => { if (key == "1") startQuiz(); }); } catch { }
+                }
 
                 // 超时管理
                 System.Windows.Forms.Timer timer = null;
@@ -2472,7 +2490,35 @@ namespace ToastFish.View
                 };
 
                 // Shown 时句柄已建、内容已渲染，按真实高度做一次最终布局校正
-                form.Shown += (s, e) => { if (!readingArranged) { readingArranged = true; ArrangeReadingStage(); } };
+                form.Shown += (s, e) =>
+                {
+                    if (!readingArranged) { readingArranged = true; ArrangeReadingStage(); }
+
+                    // #143：直入英译汉（考研 Part C 题型）—— 没有测验，所以 doClose 那条链永远不会被赋值，
+                    // 这里必须自己给 closeIntensive 收尾，否则点「完成精读」会在 closeIntensive() 上空引用。
+                    if (startAtTranslation && transList.Count > 0)
+                    {
+                        startAtTranslation = false;   // 只做一次
+                        closeIntensive = () =>
+                        {
+                            int att = 0, cor = 0;
+                            for (int i = 0; i < transGrades.Length; i++)
+                            {
+                                var g = transGrades[i];
+                                if (g == null) continue;
+                                att++;
+                                if (g.Score >= 6) cor++;   // 6/10 及以上算「译对一句」
+                            }
+                            try { answersSink?.Invoke(BuildTransAnswersJson(transGrades, transInputs, transList)); } catch { }
+                            // 必须先 finish 再 Close：Close() 会同步触发 FormClosed 里的 finish(-1)，先 Close 就把 0/0 盖掉了
+                            finish((att << 16) | cor);
+                            form.Close();
+                        };
+                        rtb.MarkupEnabled = false;
+                        clearBottomPanel();
+                        showTransStage(0);
+                    }
+                };
 
                 _isHidden = false;
                 _current = form;
@@ -2481,6 +2527,24 @@ namespace ToastFish.View
                 btnQuiz.Focus();
                 form.BeginInvoke(new Action(() => { form.TopMost = true; form.BringToFront(); }));
             }));
+        }
+
+        /// <summary>
+        /// 英译汉逐句作答 JSON（2026-11-18 / #143），存进 EssayLog.answers：
+        /// [{"i":1,"s":"原句","user":"学生译文","score":9.5}]，未评分 score=-1。
+        /// </summary>
+        private static string BuildTransAnswersJson(Model.Ai.TransGrade[] grades, string[] inputs,
+            List<Model.Ai.TransItem> items)
+        {
+            var list = new List<object>();
+            for (int i = 0; i < items.Count; i++)
+            {
+                double sc = -1;
+                if (grades != null && grades.Length > i && grades[i] != null) sc = grades[i].Score;
+                string u = (inputs != null && inputs.Length > i) ? (inputs[i] ?? "") : "";
+                list.Add(new { i = i + 1, s = items[i].Sentence, user = u, score = sc });
+            }
+            return new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(list);
         }
 
         /// <summary>在内嵌面板中展示一道测验题（2026-07-21）。</summary>

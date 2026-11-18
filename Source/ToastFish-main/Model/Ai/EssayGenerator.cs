@@ -277,6 +277,13 @@ namespace ToastFish.Model.Ai
         public string Better;              // 改进译法
     }
 
+    /// <summary>考研英语 Part C 英译汉（2026-11-18 / #143）：一篇短文 + 其中 5 句待译</summary>
+    public class TransPassage
+    {
+        public string En;                                     // 短文原文（待译句都在其中）
+        public List<TransItem> Items = new List<TransItem>();  // 恰好 5 句
+    }
+
     /// <summary>AI 短文生成结果</summary>
     public class EssayResult
     {
@@ -533,6 +540,62 @@ namespace ToastFish.Model.Ai
             "输出纯JSON文本，格式：" +
             "{\"text\":\"短文含[1]...[20]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\",\"questions\":[{\"blank\":1,\"options\":[\"选项A\",\"选项B\",\"选项C\",\"选项D\"],\"answer\":0},...]}" +
             "questions必须恰好20项，blank=1~20，每项options恰好4个选项，answer是正确选项下标(0~3)。只输出纯JSON，**禁止用markdown代码块包裹**。";
+
+        /// <summary>考研英语 Part C 英译汉 prompt（快速版，2026-11-18 / #143）。</summary>
+        private const string TRANS_PROMPT_KAOYAN =
+            "设计一道考研英语（一）Part C 英译汉（Reading Comprehension Part C，5 句划线翻译）。" +
+            "用户给出一份单词列表，这是他们**刚刚学完的词**：短文里要自然用上这些词，让用户在翻译时再见到它们。" +
+            "" +
+            "要求：" +
+            "1) 写一篇 240~300 词的英文短文：考研英语 Part C 的说明文/议论文风格——讨论抽象话题（制度、教育、技术与社会、学术方法等），" +
+            "句法复杂、逻辑严密，多用从句、非谓语、插入语；语域为通用学术英语，不要堆砌某一学科的行话。**必须**包含用户列表中的每一个词（允许屈折变化），自然地融入。" +
+            "" +
+            "2) 从短文中选出**恰好 5 句**划线句（items 恰好 5 项）。选句标准（模仿真题）：" +
+            "a) 每句 25~45 词，长度接近，难度相当；" +
+            "b) 每句都要含至少一处结构难点（定语从句 / 状语从句 / 非谓语短语 / 插入语 / 比较结构 / 被动语态 / 倒装）；" +
+            "c) 采分点密集：每句有 3~4 处容易译错的点（固定搭配、抽象名词、代词指代、逻辑关系词、熟词僻义）；" +
+            "d) 5 句分散在全文不同段落，不得相邻、不得重叠、不得包含整段；" +
+            "e) 不要选含专有名词、数字、引语的句子。" +
+            "" +
+            "★★★ 最重要规则：s 必须与短文 en 中的原句**逐字一致** ★★★" +
+            "直接复制原文那一句（标点、大小写完全相同），不得改写、不得省略、不得用省略号截断，也不要在句首加编号。" +
+            "输出前逐句自检：把 s 拿到 en 里搜索，必须能原样搜到。" +
+            "" +
+            "3) 每句给出：" +
+            "ref —— 参考译文：准确、通顺、符合汉语表达习惯（不要逐字硬译，语序按中文调整），体现采分点；" +
+            "points —— 3~4 条采分点，每条是一个短词或短语（如 \"not...but...\"、\"attribute A to B\"），不要写整句解释。" +
+            "" +
+            "输出纯 JSON，格式：" +
+            "{\"en\":\"短文全文（分段用\\n\\n）\",\"items\":[{\"s\":\"原文里的那一句（逐字复制）\",\"ref\":\"参考译文\",\"points\":[\"采分点1\",\"采分点2\",\"采分点3\"]},...]}" +
+            "items 必须恰好 5 项。只输出 JSON。";
+
+        /// <summary>考研英语 Part C 英译汉 prompt（推理版）。</summary>
+        private const string TRANS_PROMPT_REASON_KAOYAN =
+            "设计一道考研英语（一）Part C 英译汉（Reading Comprehension Part C，5 句划线翻译）。" +
+            "用户给出一份单词列表，这是他们**刚刚学完的词**：短文里要自然用上这些词，让用户在翻译时再见到它们。" +
+            "" +
+            "要求：" +
+            "1) 写一篇英文短文（不设字数限制，按内容需要充分展开）：考研英语 Part C 的说明文/议论文风格——讨论抽象话题（制度、教育、技术与社会、学术方法等），" +
+            "句法复杂、逻辑严密，多用从句、非谓语、插入语；语域为通用学术英语，不要堆砌某一学科的行话。**必须**包含用户列表中的每一个词（允许屈折变化），自然地融入。" +
+            "" +
+            "2) 从短文中选出**恰好 5 句**划线句（items 恰好 5 项）。选句标准（模仿真题）：" +
+            "a) 每句 25~45 词，长度接近，难度相当；" +
+            "b) 每句都要含至少一处结构难点（定语从句 / 状语从句 / 非谓语短语 / 插入语 / 比较结构 / 被动语态 / 倒装）；" +
+            "c) 采分点密集：每句有 3~4 处容易译错的点（固定搭配、抽象名词、代词指代、逻辑关系词、熟词僻义）；" +
+            "d) 5 句分散在全文不同段落，不得相邻、不得重叠、不得包含整段；" +
+            "e) 不要选含专有名词、数字、引语的句子。" +
+            "" +
+            "★★★ 最重要规则：s 必须与短文 en 中的原句**逐字一致** ★★★" +
+            "直接复制原文那一句（标点、大小写完全相同），不得改写、不得省略、不得用省略号截断，也不要在句首加编号。" +
+            "输出前逐句自检：把 s 拿到 en 里搜索，必须能原样搜到。" +
+            "" +
+            "3) 每句给出：" +
+            "ref —— 参考译文：准确、通顺、符合汉语表达习惯（不要逐字硬译，语序按中文调整），体现采分点；" +
+            "points —— 3~4 条采分点，每条是一个短词或短语（如 \"not...but...\"、\"attribute A to B\"），不要写整句解释。" +
+            "" +
+            "输出纯 JSON 文本，格式：" +
+            "{\"en\":\"短文全文（分段用\\n\\n）\",\"items\":[{\"s\":\"原文里的那一句（逐字复制）\",\"ref\":\"参考译文\",\"points\":[\"采分点1\",\"采分点2\",\"采分点3\"]},...]}" +
+            "items 必须恰好 5 项。只输出纯 JSON，**禁止用markdown代码块包裹**。";
 
         /// <summary>流式请求时实时更新的 AI 思考原文。推理模式下预生成 Task 写入，PushMiniReading 读取。</summary>
         public static volatile string LiveThinking = null;
@@ -1264,6 +1327,276 @@ namespace ToastFish.Model.Ai
 
             result = r;
             return true;
+        }
+
+        /// <summary>
+        /// 考研英语 Part C 英译汉生成（2026-11-18 / #143）。
+        /// 一篇短文 + 恰好 5 句划线句（每句含参考译文与采分点）。同步调用，失败返回 false 不抛异常。
+        /// </summary>
+        public static bool TryGenerateTrans(List<string> words, out TransPassage result, out string error)
+        {
+            return TryGenerateJson("TRANS", words,
+                TRANS_PROMPT_KAOYAN, TRANS_PROMPT_REASON_KAOYAN, 3000,
+                ParseTransPassage, null, out result, out error);
+        }
+
+        // ===== 短文练习（Alt+R，#144 / 2026-11-18）=====
+        // 与「学后短文」的区别：不依赖本轮新词，直接从正式出版物节选/改编，难度跟随当前词库。
+        // 全部复用现有解析器（ParseResult / ParseClozeResult / ParseCloze4ChoiceResult / ParseTransPassage）——
+        // 选项洗牌、答案泄漏检测、幻觉句丢弃这些保护一条都不用重写。
+
+        private const string PRACTICE_SOURCE_RULE =
+            " 取材必须来自真实存在的正式出版物：各国官方报刊（The Economist、The Guardian、The New York Times、BBC、中国日报、新华社英文等）、" +
+            "经典书目或政府/国际组织正式文件；用自己的话改写压缩，保留原文的论点与事实；" +
+            "禁止编造具体标题、作者、日期或数据，source 只写「刊物名（改编）」这类能核实的信息，拿不准就写「通用正式文体（改编）」。";
+
+        private const string PRACTICE_WORDS_RULE =
+            " 若给了单词列表，尽量自然地把它们用进短文（允许屈折变化），但不许为用词牺牲通顺；这些词只用于高亮，不要求全部出现。";
+
+        /// <summary>短文练习的阅读篇目（4 道单选题）。</summary>
+        public class PracticePassage
+        {
+            public string Source;
+            public string EssayEN;
+            public string EssayCN;
+            public List<EssayQuestion> Questions = new List<EssayQuestion>();
+        }
+
+        /// <summary>短文练习：经典阅读（4 道单选，Alt+R → 经典阅读）。</summary>
+        public static bool TryGeneratePracticeReading(string bookName, List<string> words,
+            out PracticePassage result, out string error)
+        {
+            string level = GetBookLevel(bookName);
+            string head = "用户在做" + level + "难度的英语阅读练习。写一篇英语议论文或说明文，分 4 段（段间空行），" +
+                          "有明确论点、具体例证与转折，题材取自时政/科技/社会/文化/经济等正式话题。";
+            string tail =
+                " 然后出 4 道" + level + "水准的单选题：题型分别为细节理解、推理判断、主旨大意、词义或态度，互不重复；" +
+                "每题 4 个选项（每个 6~12 个单词），只有 1 个正确，正确项必须同义改写（禁止照抄原文词句），" +
+                "干扰项要有迷惑性，4 个选项长度均衡；以 the word / the phrase 提问时，被问的词必须逐字出现在短文中。" +
+                " 另给全文中文翻译 cn。" + PRACTICE_SOURCE_RULE + PRACTICE_WORDS_RULE +
+                " 输出 JSON：{\"source\":\"出处\",\"en\":\"英文短文\",\"cn\":\"中文翻译\"," +
+                "\"questions\":[{\"q\":\"英文题干\",\"choices\":[\"A\",\"B\",\"C\",\"D\"],\"answer\":0}]}，" +
+                "answer 是正确项下标(0~3)。只输出 JSON。";
+            string fast = head + "篇幅 240~320 词。" + tail;
+            string reason = head + "篇幅按内容需要自由发挥（400 词以内），不必刻意精简。" + tail;
+
+            return TryGenerateJson("PRACTICE_READING", words, fast, reason, 2000,
+                ParsePracticePassage, null, out result, out error);
+        }
+
+        /// <summary>解析短文练习（阅读）：复用 ParseResult 的题目容错/洗牌，再补一个 source。</summary>
+        private static bool ParsePracticePassage(string content, out PracticePassage result, out string error)
+        {
+            result = null;
+            EssayResult er;
+            string inner;
+            if (!ParseResult(content, out er, out inner)) { error = inner; return false; }
+            if (er.Questions.Count < 3)
+            {
+                error = "题目不足（需≥3题，实际" + er.Questions.Count + "）";
+                return false;
+            }
+            var r = new PracticePassage();
+            r.Source = ExtractJsonField(content, "source");
+            if (string.IsNullOrEmpty(r.Source)) r.Source = "正式出版物（改编）";
+            r.EssayEN = er.EssayEN;
+            r.EssayCN = er.EssayCN;
+            r.Questions = er.Questions;
+            result = r;
+            error = null;
+            return true;
+        }
+
+        /// <summary>从 JSON 里取一个顶层字符串字段（解析器只负责正文，出处是练习专用）。</summary>
+        private static string ExtractJsonField(string content, string field)
+        {
+            if (string.IsNullOrEmpty(content)) return null;
+            int lb = content.IndexOf('{'), rb = content.LastIndexOf('}');
+            if (lb < 0 || rb <= lb) return null;
+            try
+            {
+                var doc = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                    content.Substring(lb, rb - lb + 1));
+                if (doc == null) return null;
+                return (GetStr(doc, field) ?? "").Trim();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>短文练习：15选10 选词填空（Alt+R → 15选10）。</summary>
+        public static bool TryGeneratePracticeCloze(string bookName, List<string> words,
+            out ClozeResult result, out string source, out string error)
+        {
+            string level = GetBookLevel(bookName);
+            string head = "用户在做" + level + "难度的 15选10 选词填空（Banked Cloze）。写一篇英语说明文或议论文，分 3~4 段，挖 10 个空，" +
+                          "正文里用 [1]…[10] 逐个顶替被挖掉的词，正文其他位置不得残留答案词（答案泄漏直接判错）。";
+            string tail =
+                " 给 15 个候选词：10 个是答案（blank 填 1~10，即对应空位编号）、5 个是干扰词（blank 填 -1）；" +
+                "干扰词与被替换词词性一致、屈折形式一致，以搭配不当或语义偏离为主，近义辨析干扰不超过 1 个。" +
+                " 再给填好答案后的中文翻译 cn，不得残留 [N]。" + PRACTICE_SOURCE_RULE + PRACTICE_WORDS_RULE +
+                " 输出 JSON：{\"source\":\"出处\",\"text\":\"含[1]..[10]的短文\",\"cn\":\"中文翻译\"," +
+                "\"candidates\":[{\"word\":\"答案词\",\"blank\":1}]}。只输出 JSON。";
+            string fast = head + "篇幅 200~260 词。" + tail;
+            string reason = head + "篇幅按内容需要自由发挥（320 词以内）。" + tail;
+
+            string srcLocal = null;
+            bool ok = TryGenerateJson("PRACTICE_CLOZE", words, fast, reason, 2000,
+                (string content, out ClozeResult r, out string e) =>
+                {
+                    string s = ExtractJsonField(content, "source");
+                    if (!string.IsNullOrEmpty(s)) srcLocal = s;
+                    return ParseClozeResult(content, out r, out e);
+                }, null, out result, out error);
+            source = srcLocal;
+            return ok;
+        }
+
+        /// <summary>短文练习：20空四选一完形填空（Alt+R → 20空四选一）。</summary>
+        public static bool TryGeneratePracticeCloze4(string bookName, List<string> words,
+            out Cloze4Result result, out string source, out string error)
+        {
+            string level = GetBookLevel(bookName);
+            string head = "用户在做" + level + "难度的 20空四选一完形填空（Use of English）。写一篇英语说明文，挖 20 个空，" +
+                          "正文里用 [1]…[20] 逐个顶替被挖掉的词，正文其他位置不得残留答案词。";
+            string tail =
+                " 每个空给 4 个选项（单词或短语），只有 1 个正确；干扰项与被替换词词性一致，以搭配不同或语义偏离为主，" +
+                "正确项在 4 个位置里随机分布且长度与干扰项相当。" +
+                " 再给填好答案后的中文翻译 cn，不得残留 [N]。" + PRACTICE_SOURCE_RULE + PRACTICE_WORDS_RULE +
+                " 输出 JSON：{\"source\":\"出处\",\"text\":\"含[1]..[20]的短文\",\"cn\":\"中文翻译\"," +
+                "\"questions\":[{\"blank\":1,\"options\":[\"A\",\"B\",\"C\",\"D\"],\"answer\":0}]}。只输出 JSON。";
+            string fast = head + "篇幅 250~320 词。" + tail;
+            string reason = head + "篇幅按内容需要自由发挥（420 词以内）。" + tail;
+
+            string srcLocal = null;
+            bool ok = TryGenerateJson("PRACTICE_CLOZE4", words, fast, reason, 2600,
+                (string content, out Cloze4Result r, out string e) =>
+                {
+                    string s = ExtractJsonField(content, "source");
+                    if (!string.IsNullOrEmpty(s)) srcLocal = s;
+                    return ParseCloze4ChoiceResult(content, out r, out e);
+                }, null, out result, out error);
+            source = srcLocal;
+            return ok;
+        }
+
+        /// <summary>短文练习：英译汉 5 句（Alt+R → 英译汉）。</summary>
+        public static bool TryGeneratePracticeTrans(string bookName, List<string> words,
+            out TransPassage result, out string source, out string error)
+        {
+            string level = GetBookLevel(bookName);
+            string head = "用户在做" + level + "难度的英译汉练习。先写一篇英语短文（议论或说明，分 4 段），" +
+                          "再从文中挑出恰好 5 句划线句作为待译句：每句 25~45 词、含从句或非谓语、采分点密集。";
+            string tail =
+                " 每句给 s（原句，必须逐字出现在短文里）、ref（通顺的中文参考译文）、points（3~4 条采分点，中文）。" +
+                PRACTICE_SOURCE_RULE + PRACTICE_WORDS_RULE +
+                " 输出 JSON：{\"source\":\"出处\",\"en\":\"短文\",\"items\":[{\"s\":\"原句\",\"ref\":\"参考译文\",\"points\":[\"采分点\"]}]}。" +
+                "只输出 JSON。";
+            string fast = head + "短文 240~300 词。" + tail;
+            string reason = head + "短文篇幅按内容需要自由发挥（400 词以内）。" + tail;
+
+            string srcLocal = null;
+            bool ok = TryGenerateJson("PRACTICE_TRANS", words, fast, reason, 3000,
+                (string content, out TransPassage r, out string e) =>
+                {
+                    string s = ExtractJsonField(content, "source");
+                    if (!string.IsNullOrEmpty(s)) srcLocal = s;
+                    return ParseTransPassage(content, out r, out e);
+                }, null, out result, out error);
+            source = srcLocal;
+            return ok;
+        }
+
+        /// <summary>
+        /// 解析英译汉 JSON。
+        /// ⚠️ s 必须能在 en 里找到（逐字，宽松到「空白差异」）：找不到的句子直接丢弃 ——
+        ///    否则原文划线位置对不上，用户根本看不到要译哪一句。
+        /// </summary>
+        private static bool ParseTransPassage(string content, out TransPassage result, out string error)
+        {
+            result = null; error = null;
+            if (string.IsNullOrEmpty(content)) { error = "AI 返回内容为空"; return false; }
+
+            int lb = content.IndexOf('{');
+            int rb = content.LastIndexOf('}');
+            if (lb < 0 || rb <= lb) { error = "AI 返回的不是 JSON"; return false; }
+            content = content.Substring(lb, rb - lb + 1);
+
+            Dictionary<string, object> doc;
+            try
+            {
+                doc = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(content);
+            }
+            catch (Exception e) { error = "JSON 解析失败: " + e.Message; return false; }
+            if (doc == null) { error = "JSON 解析结果为空"; return false; }
+
+            var r = new TransPassage();
+            r.En = (GetStr(doc, "en") ?? "").Replace("\r\n", "\n").Trim();
+            if (r.En.Length < 200) { error = "AI 返回短文缺失或过短"; return false; }
+
+            object itemsObj;
+            var items = doc.TryGetValue("items", out itemsObj) ? itemsObj as System.Collections.ArrayList : null;
+            if (items == null || items.Count < 4)
+            { error = "划线句不足（需≥4句，实际" + (items == null ? 0 : items.Count) + "）"; return false; }
+
+            foreach (object io in items)
+            {
+                var id = io as Dictionary<string, object>;
+                if (id == null) continue;
+
+                string raw = GetStr(id, "s");
+                string s = CleanTransSentence(raw);
+                if (s.Length < 12) continue;
+                if (!TransSentenceFound(r.En, s)) continue;
+
+                string rf = (GetStr(id, "ref") ?? "").Trim();
+                if (rf.Length == 0) continue;
+
+                var it = new TransItem();
+                it.Sentence = s;
+                it.Reference = rf;
+                object ptsObj;
+                var pts = id.TryGetValue("points", out ptsObj) ? ptsObj as System.Collections.ArrayList : null;
+                if (pts != null)
+                {
+                    foreach (object po in pts)
+                    {
+                        var p = (po as string);
+                        if (string.IsNullOrEmpty(p)) continue;
+                        p = p.Trim();
+                        if (p.Length == 0 || it.Points.Count >= 4) continue;
+                        it.Points.Add(p);
+                    }
+                }
+                r.Items.Add(it);
+                if (r.Items.Count >= 5) break;   // 只要 5 句，多给的丢掉
+            }
+
+            if (r.Items.Count < 4)
+            { error = "有效划线句不足（需≥4句，实际" + r.Items.Count + "）"; return false; }
+
+            result = r;
+            return true;
+        }
+
+        /// <summary>清掉 AI 有时加的编号、引号、加粗星号（如「1. 」「**…**」「“…”」）。</summary>
+        private static string CleanTransSentence(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            s = s.Replace("\r\n", "\n").Trim();
+            s = s.Trim('"', '\'', '*', '“', '”', '‘', '’', '「', '」', ' ');
+            // 去掉句首编号：1. / 1) / (1) / ① 这种
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"^\s*(?:\(?\d{1,2}[.):]|[\u2460-\u2473])\s*", "");
+            return s.Trim();
+        }
+
+        /// <summary>s 是否真的出现在短文里（先逐字比，退一步把两边空白压成单空格再比）。</summary>
+        private static bool TransSentenceFound(string en, string s)
+        {
+            if (string.IsNullOrEmpty(en) || string.IsNullOrEmpty(s)) return false;
+            if (en.IndexOf(s, StringComparison.Ordinal) >= 0) return true;
+            string h = System.Text.RegularExpressions.Regex.Replace(en, @"\s+", " ");
+            string n = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ");
+            return h.IndexOf(n, StringComparison.Ordinal) >= 0;
         }
 
         /// <summary>CLOZE 修正轮：同上。</summary>

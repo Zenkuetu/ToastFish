@@ -58,6 +58,7 @@ namespace ToastFish
             new HotKey(Key.D4, KeyModifier.Alt , OnHotKeyHandler);
             new HotKey(Key.Q, KeyModifier.Alt, OnHotKeyHandler);
             new HotKey(Key.H, KeyModifier.Alt, OnHotKeyHandler);  // ALT+H 隐藏/显示学习弹窗
+            new HotKey(Key.R, KeyModifier.Alt, OnHotKeyHandler);  // #144 ALT+R 短文练习（独立于学习流程）
 
             // 谜之bug，如果不先播放一段音频，那么什么声音都播不出来。
             // 所以播个没声音的音频先。
@@ -106,6 +107,10 @@ namespace ToastFish
                     break;
                 case "Oem3":
                     PushWords.HotKeytObservable.raiseEvent("S");
+                    break;
+                case "R":
+                    // #144：选题 + 生成全部在后台，热键回调里绝不能等 AI（#140）
+                    Model.PushControl.PassagePractice.Begin();
                     break;
                 case "H":
                     // #94（3.4.1）自愈：弹窗已经没了但这一轮还挂着，按 Alt+H 直接重开，
