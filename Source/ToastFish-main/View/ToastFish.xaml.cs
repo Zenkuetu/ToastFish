@@ -50,6 +50,8 @@ namespace ToastFish
             SetNotifyIcon();
             this.Visibility = Visibility.Hidden;
             Se.LoadGlobalConfig();
+            // #145：短文练习热键必须在 ContextMenu() 之前注册 —— 菜单要显示「实际生效的那个组合」
+            RegisterPracticeHotKey();
             ContextMenu();
             new HotKey(Key.Oem3, KeyModifier.Alt , OnHotKeyHandler);
             new HotKey(Key.D1, KeyModifier.Alt , OnHotKeyHandler);
@@ -58,7 +60,7 @@ namespace ToastFish
             new HotKey(Key.D4, KeyModifier.Alt , OnHotKeyHandler);
             new HotKey(Key.Q, KeyModifier.Alt, OnHotKeyHandler);
             new HotKey(Key.H, KeyModifier.Alt, OnHotKeyHandler);  // ALT+H 隐藏/显示学习弹窗
-            new HotKey(Key.R, KeyModifier.Alt, OnHotKeyHandler);  // #144 ALT+R 短文练习（独立于学习流程）
+            // #144 ALT+R 短文练习：注册已上移到 ContextMenu() 之前（#145 起带候选组合回退）
 
             // 谜之bug，如果不先播放一段音频，那么什么声音都播不出来。
             // 所以播个没声音的音频先。
@@ -80,9 +82,46 @@ namespace ToastFish
 
             // 启动后延迟静默检查 GitHub 更新：有新版才弹窗，其余情况完全静默（2026-10-15 新增）
             StartUpdateCheck(false);
+
+            // #145：热键被占用时必须明说，否则用户只会觉得「按了没反应」
+            if (_practiceKeyLabel.Length > 0 && _practiceKeyLabel != "Alt+R")
+                NotificationForm.ShowMessage("短文练习",
+                    "Alt+R 已被其他程序占用（常见是显卡/录屏/输入法工具的热键），短文练习改用 "
+                    + _practiceKeyLabel + "；托盘菜单里也能直接打开。", 12000);
+            else if (_practiceKeyLabel.Length == 0)
+                NotificationForm.ShowMessage("短文练习",
+                    "Alt+R 等候选组合都被其他程序占用了，短文练习请从托盘菜单打开。", 12000);
             //this.WindowState = (WindowState)FormWindowState.Minimized;
         }
 
+
+        // #145：短文练习热键的实际生效组合（Alt+R 常被显卡/录屏/输入法工具占用，
+        // RegisterHotKey 失败既不抛异常也不报错，表现就是「按了没反应」）
+        private HotKey _practiceHotKey;
+        private static string _practiceKeyLabel = "";
+
+        /// <summary>按候选顺序注册短文练习热键，取第一个真正注册成功的组合。</summary>
+        private void RegisterPracticeHotKey()
+        {
+            var candidates = new[]
+            {
+                new { K = Key.R, M = KeyModifier.Alt, Label = "Alt+R" },
+                new { K = Key.R, M = KeyModifier.Alt | KeyModifier.Ctrl, Label = "Ctrl+Alt+R" },
+                new { K = Key.P, M = KeyModifier.Alt, Label = "Alt+P" },
+                new { K = Key.P, M = KeyModifier.Alt | KeyModifier.Ctrl, Label = "Ctrl+Alt+P" },
+                new { K = Key.P, M = KeyModifier.Alt | KeyModifier.Shift, Label = "Alt+Shift+P" },
+            };
+
+            foreach (var c in candidates)
+            {
+                var hk = new HotKey(c.K, c.M, OnHotKeyHandler);
+                if (!hk.Registered) continue;
+                _practiceHotKey = hk;
+                _practiceKeyLabel = c.Label;
+                return;
+            }
+            _practiceKeyLabel = "";
+        }
 
         private void OnHotKeyHandler(HotKey hotKey)
         {
@@ -109,6 +148,7 @@ namespace ToastFish
                     PushWords.HotKeytObservable.raiseEvent("S");
                     break;
                 case "R":
+                case "P":   // #145：Alt+R 被占用时回退到 Ctrl+Alt+R 之外的 Alt+P 等组合
                     // #144：选题 + 生成全部在后台，热键回调里绝不能等 AI（#140）
                     Model.PushControl.PassagePractice.Begin();
                     break;
@@ -422,6 +462,13 @@ namespace ToastFish
             Cms.Items.Add(RandomTest);
             Cms.Items.Add(Settings);
             Cms.Items.Add(GotoHtml);
+
+            // #145：热键被占用时的兜底入口 —— 托盘里永远能打开选题窗
+            ToolStripItem PracticeItem = new ToolStripMenuItem("短文练习" +
+                (_practiceKeyLabel.Length > 0 ? "（" + _practiceKeyLabel + "）" : "") + "…");
+            PracticeItem.Click += new EventHandler((s, e) => Model.PushControl.PassagePractice.Begin());
+            Cms.Items.Add(PracticeItem);
+
             Cms.Items.Add(Dashboard);
             Cms.Items.Add(Start);
             Cms.Items.Add(ExitMenuItem);

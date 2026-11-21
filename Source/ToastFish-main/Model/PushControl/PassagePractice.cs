@@ -48,7 +48,7 @@ namespace ToastFish.Model.PushControl
             var picker = NotificationForm.ShowWithButtons(
                 "短文练习",
                 "当前词库：" + level + "。挑一种题型，AI 会按这个难度从正式出版物节选并改编，题目与选项也由 AI 编写。",
-                new[] { "经典阅读（4 道单选）", "15选10 选词填空", "20空四选一 完形填空", "英译汉（5 句划线）", "随机一种" },
+                new[] { "经典阅读（4 道单选）", "15选10 选词填空", "20空四选一 完形填空", "英译汉（整段翻译）", "随机一种" },
                 0, true);
 
             picker.ContinueWith(t =>
@@ -85,7 +85,7 @@ namespace ToastFish.Model.PushControl
                 string answers = "[]";
                 NotificationForm.ShowEssayPopup(p.EssayEN, p.EssayCN, words, null, p.Questions,
                     r => Finish("阅读", words, p.EssayEN, p.EssayCN, qJson, r, answers, p.Source, book),
-                    0, j => answers = j, null, null, false, "短文练习 · " + SourceOf(p.Source));
+                    0, j => answers = j, null, null, "短文练习 · " + SourceOf(p.Source));
                 return;
             }
 
@@ -130,15 +130,11 @@ namespace ToastFish.Model.PushControl
             string tsrc;
             if (!EssayGenerator.TryGeneratePracticeTrans(book, words, out t, out tsrc, out error)) { Fail(error); return; }
             if (!CanShow()) return;
-            string tJson = jss.Serialize(new
-            {
-                type = "trans",
-                items = t.Items.ConvertAll(it => new { s = it.Sentence, refer = it.Reference, points = it.Points })
-            });
+            string tJson = jss.Serialize(new { type = "trans", refer = t.Reference, points = t.Points });
             string tAnswers = "[]";
-            NotificationForm.ShowEssayPopup(t.En, "", words, null, null,
+            NotificationForm.ShowTransPassagePopup("短文练习 · " + SourceOf(tsrc), t, words,
                 r => Finish("英译汉", words, t.En, "", tJson, r, tAnswers, tsrc, book),
-                0, j => tAnswers = j, null, t.Items, true, "短文练习 · " + SourceOf(tsrc));
+                j => tAnswers = j, 0);
         }
 
         /// <summary>生成完成时再确认一次：万一用户这几十秒里按了 Alt+Q 开始学习，就不要再弹（会顶掉学习弹窗）。</summary>

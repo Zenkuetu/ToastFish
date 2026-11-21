@@ -2443,8 +2443,9 @@ const PageEssays = {
     const isEssayQ = (q) => Array.isArray(q) && q.length > 0
     const isClozeQ = (q) => q && q.type === 'cloze'
     const isCloze4Q = (q) => q && q.type === 'cloze4'
-    // #143 英译汉（考研 Part C）：questions 形如 {type:'trans', items:[{s,refer,points}]}
-    // answers 形如 [{i, s, user, score}]，score 是 0~10 的 AI 评分，未提交为 -1
+    // #146 英译汉（英语二 Part C）：questions 形如 {type:'trans', refer, points:[]}（整段形态）
+    // answers 是单个对象 {user, score, hits, misses, comment, better, ref}，score 是 0~10 的 AI 评分
+    // 老记录（#143 五句划线）answers 是数组 [{i,s,user,score}]，一并兼容
     const isTransQ = (q) => q && q.type === 'trans'
 
     // ===== 逐题作答（2026-10-28）=====
@@ -2479,9 +2480,31 @@ const PageEssays = {
     }
     const verdictText = (v) => v === 'ok' ? '✓ 答对' : (v === 'bad' ? '✗ 答错' : (v === 'unanswered' ? '○ 未作答' : ''))
     // 英译汉：answers 里没有 pick/ok，只有 user（我的译文）与 score（AI 评分）
-    const transOf = (log, i) => { const a = findAnswer(log, i); return a && a.user ? a.user : '' }
-    const transScore = (log, i) => { const a = findAnswer(log, i); return a && typeof a.score === 'number' ? a.score : -1 }
-    const transWrongCount = (log) => answersOf(log).filter(a => typeof a.score === 'number' && a.score >= 0 && a.score < 6).length
+    const transAnswer = (log) => {
+      const a = log && log.answers
+      if (Array.isArray(a)) return a.length ? a[0] : null          // #143 老记录：逐句数组
+      if (a && typeof a === 'object' && (a.user !== undefined || typeof a.score === 'number')) return a
+      return null
+    }
+    const transOf = (log) => { const a = transAnswer(log); return a && a.user ? a.user : '' }
+    const transScore = (log) => { const a = transAnswer(log); return a && typeof a.score === 'number' ? a.score : -1 }
+    const transComment = (log) => { const a = transAnswer(log); return a && a.comment ? a.comment : '' }
+    const transHits = (log) => { const a = transAnswer(log); return a && Array.isArray(a.hits) ? a.hits : [] }
+    const transMisses = (log) => { const a = transAnswer(log); return a && Array.isArray(a.misses) ? a.misses : [] }
+    const transBetter = (log) => { const a = transAnswer(log); return a && a.better ? a.better : '' }
+    const transRefText = (log) => {
+      const a = transAnswer(log)
+      if (a && a.ref) return a.ref
+      return (log && log.questions && log.questions.refer) || ''
+    }
+    const transWrongCount = (log) => { const s = transScore(log); return (s >= 0 && s < 6) ? 1 : 0 }
+    // #143 老记录（五句划线）兼容：questions.items 存在就按逐句渲染
+    const legacyTrans = (log) => {
+      const it = log && log.questions && log.questions.items
+      return (Array.isArray(it) && it.length) ? it : null
+    }
+    const legacyScore = (log, i) => { const a = findAnswer(log, i); return a && typeof a.score === 'number' ? a.score : -1 }
+    const legacyUser = (log, i) => { const a = findAnswer(log, i); return a && a.user ? a.user : '' }
 
     // 删除 + 提示
     const deleting = ref(false)
@@ -2587,18 +2610,16 @@ const PageEssays = {
           })
         })
       } else if (isTransQ(log.questions)) {
-        lines.push('—— 英译汉：原句 / 我的译文 / 参考译文 ——')
-        const items = (log.questions && log.questions.items) || []
-        items.forEach((it, ii) => {
-          const score = transScore(log, ii + 1)
-          const mine = transOf(log, ii + 1)
-          lines.push('第' + (ii + 1) + '句：' + (it.s || ''))
-          if (it.points && it.points.length) lines.push('   采分点：' + it.points.join(' / '))
-          lines.push('   我的译文：' + (mine || '（未提交）'))
-          lines.push('   参考译文：' + (it.refer || ''))
-          if (score >= 0) lines.push('   AI 评分：' + score + '/10')
-          lines.push('')
-        })
+        lines.push('—— 英译汉（整段翻译）：原文 / 我的译文 / 参考译文 ——')
+        const pts = (log.questions && log.questions.points) || []
+        const score = transScore(log)
+        lines.push('原文：' + (log.essayEN || ''))
+        if (pts.length) lines.push('采分点：' + pts.join(' / '))
+        lines.push('我的译文：' + (transOf(log) || '（未提交）'))
+        if (score >= 0) lines.push('AI 评分：' + score + '/10')
+        if (transComment(log)) lines.push('AI 点评：' + transComment(log))
+        lines.push('参考译文：' + (transRefText(log) || ''))
+        lines.push('')
       } else {
         lines.push('—— 题目与选项 ——')
         const qs = Array.isArray(log.questions) ? log.questions : []
@@ -2655,7 +2676,7 @@ const PageEssays = {
       }
     }
 
-    return { expandedId, toggle, onEnter, onLeave, isEssayQ, isClozeQ, isCloze4Q, isTransQ, transOf, transScore, transWrongCount, deleteEssay, deleting, toastMsg, toastType, copyEssayForAI,
+    return { expandedId, toggle, onEnter, onLeave, isEssayQ, isClozeQ, isCloze4Q, isTransQ, transOf, transScore, transWrongCount, transComment, transHits, transMisses, transBetter, transRefText, legacyTrans, legacyScore, legacyUser, deleteEssay, deleting, toastMsg, toastType, copyEssayForAI,
              showAllWrong, visibleWrongWords,
              answersOf, listedAnswers, pickedOf, isWrongPick, isRightPick, hasAnswers, wrongCount, verdictOf, verdictText }
   },
@@ -2713,7 +2734,7 @@ const PageEssays = {
             {{ isClozeQ(log.questions) ? '🔤 15选10' : (isCloze4Q(log.questions) ? '🔤 20空四选一' : (isTransQ(log.questions) ? '✍️ 英译汉' : '📖 阅读理解')) }}
           </span>
           <span class="essay-date">{{ log.createdAt }}</span>
-          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ log.correct || 0 }}/{{ isClozeQ(log.questions) ? (log.attempted || 10) : (isCloze4Q(log.questions) ? (log.attempted || 20) : (isTransQ(log.questions) ? (log.attempted || 5) : (log.attempted || 3))) }}{{ isTransQ(log.questions) ? '句译对' : '正确' }}<span v-if="isTransQ(log.questions) && transWrongCount(log) > 0" class="essay-wrong-count"> · 低分 {{ transWrongCount(log) }} 句</span><span v-else-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 题</span></span>
+          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ log.correct || 0 }}/{{ isClozeQ(log.questions) ? (log.attempted || 10) : (isCloze4Q(log.questions) ? (log.attempted || 20) : (isTransQ(log.questions) ? (log.attempted || 1) : (log.attempted || 3))) }}{{ isTransQ(log.questions) ? '段译对' : '正确' }}<span v-if="isTransQ(log.questions) && transWrongCount(log) > 0" class="essay-wrong-count"> · 得分未过 6</span><span v-else-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 题</span></span>
         </div>
         <div class="essay-summary-right">
           <span class="essay-snippet">{{ (log.essayEN || '').substring(0, 120) }}{{ (log.essayEN || '').length > 120 ? '...' : '' }}</span>
@@ -2808,16 +2829,32 @@ const PageEssays = {
             </div>
           </div>
         </div>
-        <!-- 英译汉（考研 Part C）：逐句看原句 / 我的译文 / 参考译文 / AI 评分 -->
+        <!-- 英译汉（英语二 Part C，#146 整段形态）：原文 / 我的译文 / AI 评分与点评 / 参考译文 -->
         <div class="essay-section" v-if="isTransQ(log.questions)">
-          <h4>✍️ 英译汉 ({{ log.correct || 0 }}/{{ log.attempted || (log.questions.items ? log.questions.items.length : 5) }} 句译对 · 6/10 及以上算译对)</h4>
-          <div v-for="(it, ii) in (log.questions.items || [])" :key="ii" class="essay-question">
+          <h4>✍️ 英译汉 · 整段翻译
+            <span v-if="transScore(log) >= 0" class="eq-verdict" :class="transScore(log) >= 6 ? 'ok' : 'bad'">得分 {{ transScore(log) }}/10 · {{ transScore(log) >= 6 ? '译对' : '未译对' }}</span>
+            <span v-else class="eq-verdict unanswered">○ 未提交</span>
+            <span style="font-size:10px;color:var(--text-dim);font-weight:400;">（意思准确 6 / 中文通顺 2 / 结构与逻辑 2，6 分及以上算译对）</span>
+          </h4>
+          <div class="essay-question">
+            <p v-if="log.questions.points && log.questions.points.length" style="font-size:10px;color:var(--text-dim);margin:2px 0;">采分点：{{ log.questions.points.join(' / ') }}</p>
+            <p v-if="transOf(log)" class="essay-text-cn" style="white-space:pre-wrap;">我的译文：{{ transOf(log) }}</p>
+            <p v-else class="essay-text-cn" style="color:var(--text-dim);">我的译文：（未提交）</p>
+            <div v-if="transHits(log).length" style="font-size:11px;margin:3px 0;"><span style="color:var(--text-dim);">命中要点：</span>{{ transHits(log).join(' / ') }}</div>
+            <div v-if="transMisses(log).length" style="font-size:11px;margin:3px 0;"><span style="color:var(--text-dim);">漏译欠准：</span>{{ transMisses(log).join(' / ') }}</div>
+            <p v-if="transComment(log)" style="font-size:11px;margin:3px 0;color:var(--text-dim);">总评：{{ transComment(log) }}</p>
+            <p v-if="transBetter(log)" class="essay-text-cn" style="color:var(--text-dim);">参考译法：{{ transBetter(log) }}</p>
+            <p class="essay-text-cn" style="color:var(--text-dim);white-space:pre-wrap;">整段参考译文：{{ transRefText(log) }}</p>
+          </div>
+          <!-- 老记录（#143 五句划线）：原句 / 我的译文 / 参考译文 -->
+          <div v-if="legacyTrans(log)" style="font-size:10px;color:var(--text-dim);margin-top:6px;">旧版五句划线记录：</div>
+          <div v-for="(it, ii) in (legacyTrans(log) || [])" :key="'L' + ii" class="essay-question">
             <p class="eq-text">
               {{ ii + 1 }}. {{ it.s }}
-              <span v-if="transScore(log, ii + 1) >= 0" class="eq-verdict" :class="transScore(log, ii + 1) >= 6 ? 'ok' : 'bad'">得分 {{ transScore(log, ii + 1) }}/10</span>
+              <span v-if="legacyScore(log, ii + 1) >= 0" class="eq-verdict" :class="legacyScore(log, ii + 1) >= 6 ? 'ok' : 'bad'">得分 {{ legacyScore(log, ii + 1) }}/10</span>
               <span v-else class="eq-verdict unanswered">○ 未提交</span>
             </p>
-            <p v-if="transOf(log, ii + 1)" class="essay-text-cn">我的译文：{{ transOf(log, ii + 1) }}</p>
+            <p v-if="legacyUser(log, ii + 1)" class="essay-text-cn">我的译文：{{ legacyUser(log, ii + 1) }}</p>
             <p v-if="it.points && it.points.length" style="font-size:10px;color:var(--text-dim);margin:2px 0;">采分点：{{ it.points.join(' / ') }}</p>
             <p class="essay-text-cn" style="color:var(--text-dim);">参考译文：{{ it.refer }}</p>
           </div>

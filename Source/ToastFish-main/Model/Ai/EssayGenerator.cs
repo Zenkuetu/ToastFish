@@ -277,11 +277,15 @@ namespace ToastFish.Model.Ai
         public string Better;              // 改进译法
     }
 
-    /// <summary>考研英语 Part C 英译汉（2026-11-18 / #143）：一篇短文 + 其中 5 句待译</summary>
+    /// <summary>
+    /// 英译汉整段题型（英语二 Part C 形态，2026-11-19 / #146）。
+    /// 旧版是「短文 + 5 句划线」（英语一形态），划线密度远高于真题、且和精读里那 2 句重复，已改成本形态。
+    /// </summary>
     public class TransPassage
     {
-        public string En;                                     // 短文原文（待译句都在其中）
-        public List<TransItem> Items = new List<TransItem>();  // 恰好 5 句
+        public string En;                                     // 待译英文段落（约 150 词，一个自然段）
+        public string Reference = "";                          // 整段参考译文
+        public List<string> Points = new List<string>();       // 采分点（4~5 条，中文短语）
     }
 
     /// <summary>AI 短文生成结果</summary>
@@ -541,61 +545,43 @@ namespace ToastFish.Model.Ai
             "{\"text\":\"短文含[1]...[20]标记\",\"cn\":\"中文翻译（无[N]标记，所有空位已填入对应中文词）\",\"questions\":[{\"blank\":1,\"options\":[\"选项A\",\"选项B\",\"选项C\",\"选项D\"],\"answer\":0},...]}" +
             "questions必须恰好20项，blank=1~20，每项options恰好4个选项，answer是正确选项下标(0~3)。只输出纯JSON，**禁止用markdown代码块包裹**。";
 
-        /// <summary>考研英语 Part C 英译汉 prompt（快速版，2026-11-18 / #143）。</summary>
+        /// <summary>英译汉整段 prompt（快速版，2026-11-19 / #146：英语二 Part C 形态，一段 140~170 词整段翻译）。</summary>
         private const string TRANS_PROMPT_KAOYAN =
-            "设计一道考研英语（一）Part C 英译汉（Reading Comprehension Part C，5 句划线翻译）。" +
-            "用户给出一份单词列表，这是他们**刚刚学完的词**：短文里要自然用上这些词，让用户在翻译时再见到它们。" +
+            "设计一道英语（二）Part C 英译汉：给一段英文，整段译成中文。" +
+            "用户给出一份单词列表，这是他们**刚刚学完的词**：段落里要自然用上这些词，让用户在翻译时再见到它们。" +
             "" +
             "要求：" +
-            "1) 写一篇 240~300 词的英文短文：考研英语 Part C 的说明文/议论文风格——讨论抽象话题（制度、教育、技术与社会、学术方法等），" +
-            "句法复杂、逻辑严密，多用从句、非谓语、插入语；语域为通用学术英语，不要堆砌某一学科的行话。**必须**包含用户列表中的每一个词（允许屈折变化），自然地融入。" +
+            "1) 写一段 140~170 词的英文（一个自然段；最多两段，段间空一行）：说明文/议论文风格——讨论抽象话题（制度、教育、技术与社会、学术方法等），" +
+            "句法复杂、逻辑严密，语域为通用学术英语，不要堆砌某一学科的行话。**必须**包含用户列表中的每一个词（允许屈折变化），自然地融入；词多了就挑能自然融入的，绝不硬塞。" +
             "" +
-            "2) 从短文中选出**恰好 5 句**划线句（items 恰好 5 项）。选句标准（模仿真题）：" +
-            "a) 每句 25~45 词，长度接近，难度相当；" +
-            "b) 每句都要含至少一处结构难点（定语从句 / 状语从句 / 非谓语短语 / 插入语 / 比较结构 / 被动语态 / 倒装）；" +
-            "c) 采分点密集：每句有 3~4 处容易译错的点（固定搭配、抽象名词、代词指代、逻辑关系词、熟词僻义）；" +
-            "d) 5 句分散在全文不同段落，不得相邻、不得重叠、不得包含整段；" +
-            "e) 不要选含专有名词、数字、引语的句子。" +
+            "2) 全段 2~4 处结构难点：定语从句 / 状语从句 / 非谓语短语 / 插入语 / 比较结构 / 被动语态 / 倒装 / 代词指代。" +
+            "难度均匀分布，不要把所有难点堆在同一句里；不要标题、不要编号、不要括号注释、不要中文。" +
             "" +
-            "★★★ 最重要规则：s 必须与短文 en 中的原句**逐字一致** ★★★" +
-            "直接复制原文那一句（标点、大小写完全相同），不得改写、不得省略、不得用省略号截断，也不要在句首加编号。" +
-            "输出前逐句自检：把 s 拿到 en 里搜索，必须能原样搜到。" +
+            "3) 另给两项：" +
+            "ref —— 整段参考译文：准确、通顺、符合汉语表达习惯（按中文语序调整，不要逐字硬译），每一处结构难点都要译到位；" +
+            "points —— 4~5 条采分点，每条是一个短词或短语（如 \"not...but...\"、\"attribute A to B\"、\"which 引导的非限制性定语从句\"），不要写整句解释。" +
             "" +
-            "3) 每句给出：" +
-            "ref —— 参考译文：准确、通顺、符合汉语表达习惯（不要逐字硬译，语序按中文调整），体现采分点；" +
-            "points —— 3~4 条采分点，每条是一个短词或短语（如 \"not...but...\"、\"attribute A to B\"），不要写整句解释。" +
-            "" +
-            "输出纯 JSON，格式：" +
-            "{\"en\":\"短文全文（分段用\\n\\n）\",\"items\":[{\"s\":\"原文里的那一句（逐字复制）\",\"ref\":\"参考译文\",\"points\":[\"采分点1\",\"采分点2\",\"采分点3\"]},...]}" +
-            "items 必须恰好 5 项。只输出 JSON。";
+            "输出纯 JSON，格式：{\"en\":\"英文段落\",\"ref\":\"整段参考译文\",\"points\":[\"采分点1\",\"采分点2\",\"采分点3\",\"采分点4\"]}。只输出 JSON。";
 
-        /// <summary>考研英语 Part C 英译汉 prompt（推理版）。</summary>
+        /// <summary>英译汉整段 prompt（推理版，2026-11-19 / #146）。</summary>
         private const string TRANS_PROMPT_REASON_KAOYAN =
-            "设计一道考研英语（一）Part C 英译汉（Reading Comprehension Part C，5 句划线翻译）。" +
-            "用户给出一份单词列表，这是他们**刚刚学完的词**：短文里要自然用上这些词，让用户在翻译时再见到它们。" +
+            "设计一道英语（二）Part C 英译汉：给一段英文，整段译成中文。" +
+            "用户给出一份单词列表，这是他们**刚刚学完的词**：段落里要自然用上这些词，让用户在翻译时再见到它们。" +
             "" +
             "要求：" +
-            "1) 写一篇英文短文（不设字数限制，按内容需要充分展开）：考研英语 Part C 的说明文/议论文风格——讨论抽象话题（制度、教育、技术与社会、学术方法等），" +
-            "句法复杂、逻辑严密，多用从句、非谓语、插入语；语域为通用学术英语，不要堆砌某一学科的行话。**必须**包含用户列表中的每一个词（允许屈折变化），自然地融入。" +
+            "1) 写一段 140~170 词的英文（一个自然段；最多两段，段间空一行）：说明文/议论文风格——讨论抽象话题（制度、教育、技术与社会、学术方法等），" +
+            "句法复杂、逻辑严密，语域为通用学术英语，不要堆砌某一学科的行话。**必须**包含用户列表中的每一个词（允许屈折变化），自然地融入；词多了就挑能自然融入的，绝不硬塞。" +
+            "字数按真题控制，不要因为给了很多单词就把段落写成 300 词。" +
             "" +
-            "2) 从短文中选出**恰好 5 句**划线句（items 恰好 5 项）。选句标准（模仿真题）：" +
-            "a) 每句 25~45 词，长度接近，难度相当；" +
-            "b) 每句都要含至少一处结构难点（定语从句 / 状语从句 / 非谓语短语 / 插入语 / 比较结构 / 被动语态 / 倒装）；" +
-            "c) 采分点密集：每句有 3~4 处容易译错的点（固定搭配、抽象名词、代词指代、逻辑关系词、熟词僻义）；" +
-            "d) 5 句分散在全文不同段落，不得相邻、不得重叠、不得包含整段；" +
-            "e) 不要选含专有名词、数字、引语的句子。" +
+            "2) 全段 2~4 处结构难点：定语从句 / 状语从句 / 非谓语短语 / 插入语 / 比较结构 / 被动语态 / 倒装 / 代词指代。" +
+            "难度均匀分布，不要把所有难点堆在同一句里；不要标题、不要编号、不要括号注释、不要中文。" +
             "" +
-            "★★★ 最重要规则：s 必须与短文 en 中的原句**逐字一致** ★★★" +
-            "直接复制原文那一句（标点、大小写完全相同），不得改写、不得省略、不得用省略号截断，也不要在句首加编号。" +
-            "输出前逐句自检：把 s 拿到 en 里搜索，必须能原样搜到。" +
+            "3) 另给两项：" +
+            "ref —— 整段参考译文：准确、通顺、符合汉语表达习惯（按中文语序调整，不要逐字硬译），每一处结构难点都要译到位；" +
+            "points —— 4~5 条采分点，每条是一个短词或短语（如 \"not...but...\"、\"attribute A to B\"、\"which 引导的非限制性定语从句\"），不要写整句解释。" +
             "" +
-            "3) 每句给出：" +
-            "ref —— 参考译文：准确、通顺、符合汉语表达习惯（不要逐字硬译，语序按中文调整），体现采分点；" +
-            "points —— 3~4 条采分点，每条是一个短词或短语（如 \"not...but...\"、\"attribute A to B\"），不要写整句解释。" +
-            "" +
-            "输出纯 JSON 文本，格式：" +
-            "{\"en\":\"短文全文（分段用\\n\\n）\",\"items\":[{\"s\":\"原文里的那一句（逐字复制）\",\"ref\":\"参考译文\",\"points\":[\"采分点1\",\"采分点2\",\"采分点3\"]},...]}" +
-            "items 必须恰好 5 项。只输出纯 JSON，**禁止用markdown代码块包裹**。";
+            "输出纯 JSON 文本，格式：{\"en\":\"英文段落\",\"ref\":\"整段参考译文\",\"points\":[\"采分点1\",\"采分点2\",\"采分点3\",\"采分点4\"]}。" +
+            "只输出纯 JSON，**禁止用markdown代码块包裹**。";
 
         /// <summary>流式请求时实时更新的 AI 思考原文。推理模式下预生成 Task 写入，PushMiniReading 读取。</summary>
         public static volatile string LiveThinking = null;
@@ -1204,6 +1190,85 @@ namespace ToastFish.Model.Ai
             }
         }
 
+        /// <summary>
+        /// 英译汉「整段」评分（2026-11-19 / #146，英语二 Part C 形态）。
+        /// 与逐句评分（TryGradeTranslation，精读阶段用）的区别：一次批改整段译文，采分点来自整段。
+        /// 沿用生成该段落的那次对话（system + user + assistant JSON），命中前缀缓存；没有历史时自包含发送。
+        /// </summary>
+        public static bool TryGradeTransPassage(string passage, string reference, List<string> points,
+            string userTranslation, out TransGrade grade, out string error)
+        {
+            grade = null; error = null;
+            LiveError = null;
+            AiConfig.Load();
+            if (string.IsNullOrEmpty(AiConfig.ApiKey)) { error = "未设置 API Key"; LiveError = error; return false; }
+            if (string.IsNullOrEmpty(userTranslation) || userTranslation.Trim().Length == 0)
+            {
+                error = "请先写下你的译文";
+                return false;
+            }
+
+            string pointText = "";
+            if (points != null && points.Count > 0)
+            {
+                var sb = new System.Text.StringBuilder();
+                for (int i = 0; i < points.Count; i++)
+                    sb.Append(i + 1).Append(") ").Append(points[i]).Append("\n");
+                pointText = sb.ToString();
+            }
+
+            string task =
+                "现在批改学生把下面这段英文整段译成中文的译文。只批这一篇，不要重新出题、不要改写原文。\n" +
+                "英文原文：\n" + (passage ?? "") + "\n\n" +
+                "参考译文：\n" + (reference ?? "") + "\n\n" +
+                (pointText.Length > 0 ? "采分点：\n" + pointText + "\n" : "") +
+                "学生译文：\n" + userTranslation.Trim() + "\n\n" +
+                "评分标准（满分 10 分）：意思准确 6 分（采分点是否译对、有无漏句/漏译/误译）；" +
+                "中文通顺 2 分（符合汉语表达、无翻译腔）；结构与逻辑 2 分（从句关系、指代、修饰、被动/倒装的处理是否正确）。\n" +
+                "输出纯 JSON，不要 markdown 包裹：{\"score\":0到10的小数,\"hits\":[\"译对的采分点\"],\"misses\":[\"漏译或译错的地方，并给出正确意思\"],\"comment\":\"两三句总评，指出最大问题\",\"better\":\"改得最好的一两句示范译法\"}。\n" +
+                "hits/misses/comment/better 全部用中文；score 保留一位小数。只输出 JSON。";
+
+            var msgs = new List<KeyValuePair<string, string>>();
+            string sys = LastSysPrompt;
+            if (!string.IsNullOrEmpty(sys) && !string.IsNullOrEmpty(LastAssistantContent)
+                && !string.IsNullOrEmpty(LastUserContent) && LastAssistantContent.Length < 12000)
+            {
+                msgs.Add(new KeyValuePair<string, string>("user", LastUserContent));
+                msgs.Add(new KeyValuePair<string, string>("assistant", LastAssistantContent));
+                msgs.Add(new KeyValuePair<string, string>("user", task));
+            }
+            else
+            {
+                sys = "你是英语（二）翻译阅卷老师，按采分点给分，指出漏译与误译。只输出 JSON。";
+                string excerpt = passage ?? "";
+                if (excerpt.Length > 4000) excerpt = excerpt.Substring(0, 4000);
+                msgs.Add(new KeyValuePair<string, string>("user", "段落原文：\n" + excerpt + "\n\n" + task));
+            }
+
+            try
+            {
+                string body = BuildBodyMessages(sys, msgs, false, 900);
+                string content;
+                if (!PostChat(body, false, out content, out error))
+                {
+                    LiveError = error;
+                    return false;
+                }
+                if (!ParseTransGrade(content, out grade, out error))
+                {
+                    LiveError = error;
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                error = e.Message;
+                LiveError = error;
+                return false;
+            }
+        }
+
         /// <summary>解析评分 JSON。字段缺失时给出可读错误，分数钳制到 0~10。</summary>
         private static bool ParseTransGrade(string content, out TransGrade grade, out string error)
         {
@@ -1330,8 +1395,8 @@ namespace ToastFish.Model.Ai
         }
 
         /// <summary>
-        /// 考研英语 Part C 英译汉生成（2026-11-18 / #143）。
-        /// 一篇短文 + 恰好 5 句划线句（每句含参考译文与采分点）。同步调用，失败返回 false 不抛异常。
+        /// 英译汉整段生成（2026-11-19 / #146，英语二 Part C 形态）。
+        /// 一段 140~170 词英文 + 整段参考译文 + 4~5 条采分点。同步调用，失败返回 false 不抛异常。
         /// </summary>
         public static bool TryGenerateTrans(List<string> words, out TransPassage result, out string error)
         {
@@ -1479,20 +1544,21 @@ namespace ToastFish.Model.Ai
             return ok;
         }
 
-        /// <summary>短文练习：英译汉 5 句（Alt+R → 英译汉）。</summary>
+        /// <summary>短文练习：英译汉整段（Alt+R → 英译汉，英语二 Part C 形态）。</summary>
         public static bool TryGeneratePracticeTrans(string bookName, List<string> words,
             out TransPassage result, out string source, out string error)
         {
             string level = GetBookLevel(bookName);
-            string head = "用户在做" + level + "难度的英译汉练习。先写一篇英语短文（议论或说明，分 4 段），" +
-                          "再从文中挑出恰好 5 句划线句作为待译句：每句 25~45 词、含从句或非谓语、采分点密集。";
+            string head = "用户在做" + level + "难度的英译汉练习（英语二 Part C 形态：给一段英文，整段译成中文）。" +
+                          "写一段 140~170 词的英文（一个自然段），全段含 2~4 处结构难点（从句/非谓语/插入语/比较/被动/倒装/指代），" +
+                          "语言难度对齐该级别，主题统一、结尾有落点；不要标题、不要编号、不要中文。";
             string tail =
-                " 每句给 s（原句，必须逐字出现在短文里）、ref（通顺的中文参考译文）、points（3~4 条采分点，中文）。" +
+                " 另给 ref（整段通顺的中文参考译文，每处难点都译到位）与 points（4~5 条采分点，每条一个中文短词或短语）。" +
                 PRACTICE_SOURCE_RULE + PRACTICE_WORDS_RULE +
-                " 输出 JSON：{\"source\":\"出处\",\"en\":\"短文\",\"items\":[{\"s\":\"原句\",\"ref\":\"参考译文\",\"points\":[\"采分点\"]}]}。" +
+                " 输出 JSON：{\"source\":\"出处\",\"en\":\"英文段落\",\"ref\":\"参考译文\",\"points\":[\"采分点\"]}。" +
                 "只输出 JSON。";
-            string fast = head + "短文 240~300 词。" + tail;
-            string reason = head + "短文篇幅按内容需要自由发挥（400 词以内）。" + tail;
+            string fast = head + tail;
+            string reason = head + tail;
 
             string srcLocal = null;
             bool ok = TryGenerateJson("PRACTICE_TRANS", words, fast, reason, 3000,
@@ -1507,9 +1573,9 @@ namespace ToastFish.Model.Ai
         }
 
         /// <summary>
-        /// 解析英译汉 JSON。
-        /// ⚠️ s 必须能在 en 里找到（逐字，宽松到「空白差异」）：找不到的句子直接丢弃 ——
-        ///    否则原文划线位置对不上，用户根本看不到要译哪一句。
+        /// 解析英译汉整段 JSON（2026-11-19 / #146）。
+        /// 旧版是 5 句划线：要求 s 逐字出现在 en 里，找不到就丢句。整段翻译没有划线句，
+        /// 改为对「段落篇幅」与「参考译文」两处硬校验 —— 少了任何一个，评分都没有依据。
         /// </summary>
         private static bool ParseTransPassage(string content, out TransPassage result, out string error)
         {
@@ -1531,73 +1597,33 @@ namespace ToastFish.Model.Ai
 
             var r = new TransPassage();
             r.En = (GetStr(doc, "en") ?? "").Replace("\r\n", "\n").Trim();
-            if (r.En.Length < 200) { error = "AI 返回短文缺失或过短"; return false; }
+            int enWords = r.En.Split(new[] { ' ', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
+            if (r.En.Length < 300 || enWords < 90)
+            { error = "英文段落缺失或过短（" + enWords + " 词，需≥90）"; return false; }
 
-            object itemsObj;
-            var items = doc.TryGetValue("items", out itemsObj) ? itemsObj as System.Collections.ArrayList : null;
-            if (items == null || items.Count < 4)
-            { error = "划线句不足（需≥4句，实际" + (items == null ? 0 : items.Count) + "）"; return false; }
+            r.Reference = (GetStr(doc, "ref") ?? GetStr(doc, "reference") ?? "").Trim();
+            if (r.Reference.Length < 20) { error = "AI 没有给出整段参考译文"; return false; }
 
-            foreach (object io in items)
+            object ptsObj;
+            var pts = doc.TryGetValue("points", out ptsObj) ? ptsObj as System.Collections.ArrayList : null;
+            if (pts != null)
             {
-                var id = io as Dictionary<string, object>;
-                if (id == null) continue;
-
-                string raw = GetStr(id, "s");
-                string s = CleanTransSentence(raw);
-                if (s.Length < 12) continue;
-                if (!TransSentenceFound(r.En, s)) continue;
-
-                string rf = (GetStr(id, "ref") ?? "").Trim();
-                if (rf.Length == 0) continue;
-
-                var it = new TransItem();
-                it.Sentence = s;
-                it.Reference = rf;
-                object ptsObj;
-                var pts = id.TryGetValue("points", out ptsObj) ? ptsObj as System.Collections.ArrayList : null;
-                if (pts != null)
+                foreach (object po in pts)
                 {
-                    foreach (object po in pts)
-                    {
-                        var p = (po as string);
-                        if (string.IsNullOrEmpty(p)) continue;
-                        p = p.Trim();
-                        if (p.Length == 0 || it.Points.Count >= 4) continue;
-                        it.Points.Add(p);
-                    }
+                    var p = po as string;
+                    if (string.IsNullOrEmpty(p)) continue;
+                    p = p.Trim();
+                    if (p.Length == 0 || r.Points.Count >= 5) continue;
+                    r.Points.Add(p);
                 }
-                r.Items.Add(it);
-                if (r.Items.Count >= 5) break;   // 只要 5 句，多给的丢掉
             }
-
-            if (r.Items.Count < 4)
-            { error = "有效划线句不足（需≥4句，实际" + r.Items.Count + "）"; return false; }
+            if (r.Points.Count < 2)
+            { error = "采分点不足（需≥2条，实际" + r.Points.Count + "）"; return false; }
 
             result = r;
             return true;
         }
 
-        /// <summary>清掉 AI 有时加的编号、引号、加粗星号（如「1. 」「**…**」「“…”」）。</summary>
-        private static string CleanTransSentence(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return "";
-            s = s.Replace("\r\n", "\n").Trim();
-            s = s.Trim('"', '\'', '*', '“', '”', '‘', '’', '「', '」', ' ');
-            // 去掉句首编号：1. / 1) / (1) / ① 这种
-            s = System.Text.RegularExpressions.Regex.Replace(s, @"^\s*(?:\(?\d{1,2}[.):]|[\u2460-\u2473])\s*", "");
-            return s.Trim();
-        }
-
-        /// <summary>s 是否真的出现在短文里（先逐字比，退一步把两边空白压成单空格再比）。</summary>
-        private static bool TransSentenceFound(string en, string s)
-        {
-            if (string.IsNullOrEmpty(en) || string.IsNullOrEmpty(s)) return false;
-            if (en.IndexOf(s, StringComparison.Ordinal) >= 0) return true;
-            string h = System.Text.RegularExpressions.Regex.Replace(en, @"\s+", " ");
-            string n = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ");
-            return h.IndexOf(n, StringComparison.Ordinal) >= 0;
-        }
 
         /// <summary>CLOZE 修正轮：同上。</summary>
         private static void ReviseCloze(List<string> words, string bookName, ref ClozeResult result)

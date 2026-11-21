@@ -25,6 +25,9 @@ namespace ToastFish.Model.StartWithWindows
         public KeyModifier KeyModifiers { get; private set; }
         public Action<HotKey> Action { get; private set; }
         public int Id { get; set; }
+        /// <summary>#145：RegisterHotKey 是否真的成功。被别的程序占用时为 false —— 此时本对象永远收不到按键，
+        /// 调用方必须据此决定要不要换一个组合（旧代码忽略返回值，表现就是「按了没反应、也没报错」）。</summary>
+        public bool Registered { get; private set; }
 
         // ******************************************************************
         public HotKey(Key k, KeyModifier keyModifiers, Action<HotKey> action, bool register = true)
@@ -51,7 +54,11 @@ namespace ToastFish.Model.StartWithWindows
                 ComponentDispatcher.ThreadFilterMessage += new ThreadMessageEventHandler(ComponentDispatcherThreadFilterMessage);
             }
 
-            _dictHotKeyToCalBackProc.Add(Id, this);
+            // #145：注册失败的组合不能进回调表 —— 旧代码无条件 Add，同一组合再试一次会抛
+            // 「已添加了具有相同键的项」，而且永远收不到按键、从日志也看不出失败
+            Registered = result;
+            if (result)
+                _dictHotKeyToCalBackProc[Id] = this;
 
             Debug.WriteLine($"RegisterHotKey return {result}, ID={Id},keyCode={virtualKeyCode}");
             return result;

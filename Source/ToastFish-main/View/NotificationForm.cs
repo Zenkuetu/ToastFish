@@ -1370,6 +1370,8 @@ namespace ToastFish.View
                 if (e.Button != MouseButtons.Left) return;
                 var mk = rtb as MarkupRichTextBox;
                 if (mk != null && mk.MarkupEnabled) return;   // 划重点模式下拖动是划线，不能弹浏览器
+                // #148：拖动选中文字（复制/摘抄）时不要顺手把浏览器弹出来，只有「点一下」才查词
+                if (rtb.SelectionLength > 0) return;
                 string w = GetWordAtPosition(rtb, e.Location);
                 if (!string.IsNullOrEmpty(w)) OpenYoudaoDict(w);
             };
@@ -1606,7 +1608,6 @@ namespace ToastFish.View
             Action<string> answersSink = null,
             List<Model.Ai.LongSentence> longSentences = null,
             List<Model.Ai.TransItem> translations = null,
-            bool startAtTranslation = false,
             string titleOverride = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
@@ -1624,7 +1625,7 @@ namespace ToastFish.View
 
                 // 无 Word 列表（回退）：直接进入 Phase 2（无测验）
                 ShowEssayContent(essayEN, essayCN, highlightWords, null, callback, timeoutMs, answersSink,
-                    longSentences, translations, startAtTranslation, titleOverride);
+                    longSentences, translations, titleOverride);
             }));
         }
 
@@ -1781,7 +1782,6 @@ namespace ToastFish.View
             Action<int> callback, int timeoutMs, Action<string> answersSink = null,
             List<Model.Ai.LongSentence> longSentences = null,
             List<Model.Ai.TransItem> translations = null,
-            bool startAtTranslation = false,
             string titleOverride = null)
         {
             var dispatcher = Model.PushControl.PushWords.UIDispatcher;
@@ -2446,13 +2446,9 @@ namespace ToastFish.View
                 btnQuiz.Click += (s, e) => startQuiz();
 
                 // ALT+1 热键开始测验（Phase 2 独立注册，Phase 1 的热键已随 form 关闭释放）
-                // #143：直入英译汉时没有测验，Alt+1 会把窗口关掉 —— 这种模式不订阅
                 IDisposable quizHotkey = null;
-                if (!startAtTranslation)
-                {
-                    try { quizHotkey = Model.PushControl.PushWords.HotKeytObservable.Subscribe(
-                        key => { if (key == "1") startQuiz(); }); } catch { }
-                }
+                try { quizHotkey = Model.PushControl.PushWords.HotKeytObservable.Subscribe(
+                    key => { if (key == "1") startQuiz(); }); } catch { }
 
                 // 超时管理
                 System.Windows.Forms.Timer timer = null;
@@ -2493,31 +2489,6 @@ namespace ToastFish.View
                 form.Shown += (s, e) =>
                 {
                     if (!readingArranged) { readingArranged = true; ArrangeReadingStage(); }
-
-                    // #143：直入英译汉（考研 Part C 题型）—— 没有测验，所以 doClose 那条链永远不会被赋值，
-                    // 这里必须自己给 closeIntensive 收尾，否则点「完成精读」会在 closeIntensive() 上空引用。
-                    if (startAtTranslation && transList.Count > 0)
-                    {
-                        startAtTranslation = false;   // 只做一次
-                        closeIntensive = () =>
-                        {
-                            int att = 0, cor = 0;
-                            for (int i = 0; i < transGrades.Length; i++)
-                            {
-                                var g = transGrades[i];
-                                if (g == null) continue;
-                                att++;
-                                if (g.Score >= 6) cor++;   // 6/10 及以上算「译对一句」
-                            }
-                            try { answersSink?.Invoke(BuildTransAnswersJson(transGrades, transInputs, transList)); } catch { }
-                            // 必须先 finish 再 Close：Close() 会同步触发 FormClosed 里的 finish(-1)，先 Close 就把 0/0 盖掉了
-                            finish((att << 16) | cor);
-                            form.Close();
-                        };
-                        rtb.MarkupEnabled = false;
-                        clearBottomPanel();
-                        showTransStage(0);
-                    }
                 };
 
                 _isHidden = false;
@@ -2530,22 +2501,296 @@ namespace ToastFish.View
         }
 
         /// <summary>
-        /// 英译汉逐句作答 JSON（2026-11-18 / #143），存进 EssayLog.answers：
-        /// [{"i":1,"s":"原句","user":"学生译文","score":9.5}]，未评分 score=-1。
+        /// 英译汉「整段翻译」弹窗（2026-11-19 / #146，英语二 Part C 形态）。
+        /// 一段英文 + 一个输入框 + 一次 AI 评分；交卷后原地换成「得分 / 命中 / 漏译 / 总评 / 参考译文」。
+        /// callback((attempted &lt;&lt; 16) | correct)：交卷则 attempted=1，得分 ≥6 记 correct=1；直接关掉回 -1。
         /// </summary>
-        private static string BuildTransAnswersJson(Model.Ai.TransGrade[] grades, string[] inputs,
-            List<Model.Ai.TransItem> items)
+        internal static void ShowTransPassagePopup(string title, Model.Ai.TransPassage trans,
+            List<string> highlightWords, Action<int> callback, Action<string> answersSink, int timeoutMs = 0)
         {
-            var list = new List<object>();
-            for (int i = 0; i < items.Count; i++)
+            var dispatcher = Model.PushControl.PushWords.UIDispatcher;
+            if (dispatcher == null) { callback(-1); return; }
+
+            bool finished = false;
+            Action<int> finish = r => { if (finished) return; finished = true; callback(r); };
+            _transLastScore = -1;
+
+            dispatcher.BeginInvoke(new Action(() =>
             {
-                double sc = -1;
-                if (grades != null && grades.Length > i && grades[i] != null) sc = grades[i].Score;
-                string u = (inputs != null && inputs.Length > i) ? (inputs[i] ?? "") : "";
-                list.Add(new { i = i + 1, s = items[i].Sentence, user = u, score = sc });
-            }
-            return new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(list);
+                CloseMessageOverlays();
+                _current?.Close();
+                _current?.Dispose();
+
+                int formW = 560, pad = 22;
+                int cw = formW - pad * 2;
+                var fontTitle = new Font("Microsoft YaHei UI", 13f, FontStyle.Bold);
+                var fontHint = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Regular);
+                var fontBody = new Font("Microsoft YaHei UI", 11f, FontStyle.Regular);
+                var fontResult = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Regular);
+
+                string head = string.IsNullOrEmpty(title) ? "✍️ 英译汉 · 整段翻译（英语二 Part C）" : title;
+                int hTitle = MeasureH(head, fontTitle, cw);
+                string hintText = "把下面这段英文整段译成中文，交卷后 AI 按采分点评分。点文中任意单词可跳有道词典。";
+                int hHint = MeasureH(hintText, fontHint, cw);
+
+                int btnH = 38;
+                // #147：高度改成「段落按内容 + 整体封顶 75% 屏高」，不再写死 176 ——
+                // 143 词的一段在 516px 宽下要 9 行，176px 只装得下两行半，用户看到的是带滚动条的半截段落。
+                // 段落高度必须问 RichEdit 自己：TextRenderer 对 YaHei 的折行比 RichEdit 乐观（实测 150 词差 90px）
+                int passNeed;
+                using (var rtbProbe = new RichTextBox
+                {
+                    Multiline = true, ReadOnly = true, WordWrap = true,
+                    ScrollBars = RichTextBoxScrollBars.Vertical, DetectUrls = false,
+                    BorderStyle = BorderStyle.None, Font = fontBody,
+                    Width = cw, Text = trans.En ?? ""
+                })
+                {
+                    IntPtr hProbe = rtbProbe.Handle;   // 没句柄时 GetPositionFromCharIndex 取不到行位置
+                    passNeed = RealRtbHeight(rtbProbe) + 12;
+                }
+                const int passMin = 140, inputMin = 112, inputMax = 200;
+                int chromeH = PAD_TOP + hTitle + 6 + hHint + 8 + 8 + 8 + btnH + PAD_BOTTOM; // 不含段落区与输入框
+                int capH = CapH();
+                int formH = Math.Max(MIN_FORM_H, Math.Min(chromeH + Math.Max(passMin, passNeed) + inputMin, capH));
+                int availH = formH - chromeH;                                      // 段落区 + 输入框可用高度
+                // 段落优先拿够自己的高度，剩下的才给译文框 —— 反过来先切三分之一给输入框，段落照样会被砍出滚动条
+                int passH = Math.Max(passMin, Math.Min(passNeed, availH - inputMin));
+                int inputH = Math.Min(inputMax, Math.Max(inputMin, availH - passH));
+
+                var form = new PopupForm(formW, formH, "ToastFish");
+                var wa = Screen.PrimaryScreen.WorkingArea;
+                form.PlaceBottomRight(wa);
+
+                int y = PAD_TOP;
+                form.Controls.Add(NewFixedLabel(head, Color.FromArgb(255, 200, 60), fontTitle, pad, y, cw, hTitle));
+                y += hTitle + 6;
+                form.Controls.Add(NewFixedLabel(hintText, Color.FromArgb(160, 160, 180), fontHint, pad, y, cw, hHint));
+                y += hHint + 8;
+
+                var rtbPassage = new RichTextBox
+                {
+                    Multiline = true, ReadOnly = true, WordWrap = true,
+                    ScrollBars = RichTextBoxScrollBars.Vertical,
+                    DetectUrls = false, TabStop = false,
+                    Size = new Size(cw, passH), Location = new Point(pad, y),
+                    BackColor = Color.FromArgb(32, 32, 44), ForeColor = Color.FromArgb(234, 234, 240),
+                    BorderStyle = BorderStyle.None, Font = fontBody,
+                    Text = trans.En ?? ""
+                };
+                form.Controls.Add(rtbPassage);
+                AttachWordLookup(rtbPassage);   // #148：点击文中单词跳有道词典（与短文/阅读窗一致）
+                // 目标词高亮：与短文窗一致（逐 token 上色），让用户译的时候能看见本轮学的词
+                if (highlightWords != null && highlightWords.Count > 0 && !string.IsNullOrEmpty(trans.En))
+                {
+                    var tokenRe = new System.Text.RegularExpressions.Regex(
+                        @"[^\W\d_][^\W\d_]*(?:['\-][^\W\d_]+)*");
+                    rtbPassage.Clear();
+                    int ppos = 0;
+                    foreach (System.Text.RegularExpressions.Match m in tokenRe.Matches(trans.En))
+                    {
+                        bool hit = false;
+                        foreach (string hw in highlightWords)
+                            if (Model.PushControl.WordFormMatcher.WordMatch(hw, m.Value)) { hit = true; break; }
+                        if (m.Index > ppos)
+                        {
+                            rtbPassage.SelectionFont = fontBody;
+                            rtbPassage.SelectionColor = Color.FromArgb(210, 210, 218);
+                            rtbPassage.AppendText(trans.En.Substring(ppos, m.Index - ppos));
+                        }
+                        rtbPassage.SelectionFont = hit ? new Font(fontBody, FontStyle.Bold) : fontBody;
+                        rtbPassage.SelectionColor = hit ? Color.FromArgb(255, 200, 60) : Color.FromArgb(210, 210, 218);
+                        rtbPassage.AppendText(m.Value);
+                        ppos = m.Index + m.Length;
+                    }
+                    if (ppos < trans.En.Length)
+                    {
+                        rtbPassage.SelectionFont = fontBody;
+                        rtbPassage.SelectionColor = Color.FromArgb(210, 210, 218);
+                        rtbPassage.AppendText(trans.En.Substring(ppos));
+                    }
+                    rtbPassage.SelectionStart = 0; rtbPassage.SelectionLength = 0;
+                }
+                y += passH + 8;
+
+                var txtInput = new TextBox
+                {
+                    Multiline = true, ScrollBars = ScrollBars.Vertical,
+                    Size = new Size(cw, inputH), Location = new Point(pad, y),
+                    BackColor = Color.FromArgb(44, 44, 60), ForeColor = Color.White,
+                    BorderStyle = BorderStyle.FixedSingle, Font = fontBody
+                };
+                form.Controls.Add(txtInput);
+                y += inputH + 8;
+
+                var btnSubmit = new Button
+                {
+                    Text = "交卷 · AI 评分", Size = new Size(cw, btnH), Location = new Point(pad, y),
+                    BackColor = Color.FromArgb(26, 60, 102), ForeColor = Color.FromArgb(200, 232, 255),
+                    FlatStyle = FlatStyle.Flat, Font = FONT_BTN
+                };
+                btnSubmit.FlatAppearance.BorderColor = Color.FromArgb(60, 140, 220);
+                form.Controls.Add(btnSubmit);
+
+                // 结果区（交卷后才出现，占用输入框 + 按钮的位置）
+                var lblScore = NewFixedLabel("", Color.FromArgb(255, 210, 120), fontHint, pad, txtInput.Top, cw, 22);
+                lblScore.Visible = false;
+                form.Controls.Add(lblScore);
+                var rtbResult = new RichTextBox
+                {
+                    Multiline = true, ReadOnly = true, WordWrap = true,
+                    ScrollBars = RichTextBoxScrollBars.Vertical,
+                    DetectUrls = false, TabStop = false,
+                    Size = new Size(cw, inputH + 8 + btnH - 26), Location = new Point(pad, txtInput.Top + 26),
+                    BackColor = Color.FromArgb(32, 32, 44), ForeColor = Color.FromArgb(226, 226, 234),
+                    BorderStyle = BorderStyle.None, Font = fontResult, Visible = false
+                };
+                form.Controls.Add(rtbResult);
+                var btnClose = new Button
+                {
+                    Text = "关闭", Size = new Size(cw, btnH), Location = new Point(pad, y),
+                    BackColor = Color.FromArgb(40, 90, 62), ForeColor = Color.FromArgb(210, 255, 226),
+                    FlatStyle = FlatStyle.Flat, Font = FONT_BTN, Visible = false
+                };
+                btnClose.FlatAppearance.BorderColor = Color.FromArgb(0, 150, 100);
+                form.Controls.Add(btnClose);
+
+                btnClose.Click += (s2, e2) =>
+                {
+                    double sc = _transLastScore;
+                    finish((1 << 16) | (sc >= 6 ? 1 : 0));
+                    form.Close();
+                };
+
+                btnSubmit.Click += (s2, e2) =>
+                {
+                    string mine = (txtInput.Text ?? "").Trim();
+                    if (mine.Length == 0) { btnSubmit.Text = "先写下你的译文"; return; }
+                    btnSubmit.Enabled = false;
+                    btnSubmit.Text = "AI 评分中…";
+                    System.Threading.Tasks.Task.Run(() =>
+                    {
+                        Model.Ai.TransGrade g = null; string err = null;
+                        bool ok = Model.Ai.EssayGenerator.TryGradeTransPassage(
+                            trans.En, trans.Reference, trans.Points, mine, out g, out err);
+                        return new object[] { ok, g, err };
+                    }).ContinueWith(t =>
+                    {
+                        object[] res = null;
+                        try { res = t.Result; } catch { }
+                        try
+                        {
+                            form.BeginInvoke(new Action(() =>
+                            {
+                                if (form.IsDisposed) return;
+                                bool ok = res != null && (bool)res[0];
+                                var g = res != null ? res[1] as Model.Ai.TransGrade : null;
+                                if (!ok || g == null)
+                                {
+                                    btnSubmit.Enabled = true;
+                                    btnSubmit.Text = "评分失败，点此重试";
+                                    lblScore.Visible = true;
+                                    lblScore.Text = "评分失败：" + (res != null ? (res[2] as string) : "未知错误");
+                                    return;
+                                }
+
+                                _transLastScore = g.Score;
+                                try
+                                {
+                                    var payload = new
+                                    {
+                                        user = mine, score = g.Score,
+                                        hits = g.Hits, misses = g.Misses,
+                                        comment = g.Comment, better = g.Better,
+                                        @ref = trans.Reference
+                                    };
+                                    answersSink?.Invoke(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(payload));
+                                }
+                                catch { }
+
+                                txtInput.Visible = false;
+                                btnSubmit.Visible = false;
+                                lblScore.Visible = true;
+                                lblScore.Text = string.Format("得分：{0:0.#}/10　{1}", g.Score,
+                                    g.Score >= 6 ? "· 译对了" : "· 还差一点，看看下面的参考译文");
+                                var sb = new System.Text.StringBuilder();
+                                if (g.Hits != null && g.Hits.Count > 0)
+                                    sb.Append("命中要点：").Append(string.Join("；", g.Hits.ToArray())).Append("\n\n");
+                                if (g.Misses != null && g.Misses.Count > 0)
+                                    sb.Append("漏译/欠准：").Append(string.Join("；", g.Misses.ToArray())).Append("\n\n");
+                                if (!string.IsNullOrEmpty(g.Comment))
+                                    sb.Append("总评：").Append(g.Comment).Append("\n\n");
+                                if (!string.IsNullOrEmpty(g.Better))
+                                    sb.Append("参考译法：").Append(g.Better).Append("\n\n");
+                                if (!string.IsNullOrEmpty(trans.Reference))
+                                    sb.Append("整段参考译文：\n").Append(trans.Reference);
+                                rtbResult.Text = sb.ToString();
+                                // #149：结果区原来按「输入框 + 按钮」的高度画，正好把「关闭」整块盖住
+                                // （控件后加 = z-order 更靠后 = 被压在下面），用户看到的就是「没有关闭按钮」。
+                                // 现在：趁屏幕还有余量把窗口往下加高（上限仍是 75%），按钮钉在窗口底部，结果区只占按钮上方。
+                                int grow = Math.Max(0, Math.Min(360, capH - form.Height));
+                                if (grow > 0)
+                                {
+                                    form.Height = form.Height + grow;
+                                    form.PlaceBottomRight(wa);
+                                }
+                                int btnTop = form.Height - PAD_BOTTOM - btnH;
+                                btnClose.Top = btnTop;
+                                int resH = btnTop - 8 - rtbResult.Top;
+                                if (resH < 80) resH = 80;
+                                rtbResult.Height = resH;
+                                rtbResult.Visible = true;
+                                btnClose.Visible = true;
+                                rtbResult.BringToFront();
+                                btnClose.BringToFront();
+                                btnClose.Focus();
+                            }));
+                        }
+                        catch { }
+                    });
+                };
+
+                System.Windows.Forms.Timer timer = null;
+                if (timeoutMs > 0)
+                {
+                    timer = new System.Windows.Forms.Timer { Interval = timeoutMs };
+                    timer.Tick += (s, e) =>
+                    {
+                        timer.Stop();
+                        finish(-1);
+                        form.Close();
+                    };
+                    timer.Start();
+                }
+
+                form.FormClosed += (s, e) =>
+                {
+                    timer?.Dispose();
+                    if (_current == form) _current = null;
+                    _isHidden = false;
+                    form.Dispose();
+                    // #140 教训：被别的弹窗顶掉 / 被 Esc 关掉时也要放行学习线程，否则 done.WaitOne() 永久阻塞
+                    finish(-1);
+                };
+
+                // #140：这是要用户输入的交互弹窗，必须带 Interactive 标记，否则 ShowMessage 会把它直接关掉
+                form.Tag = new PopupState
+                {
+                    Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now,
+                    PausedRemainingMs = -1, Interactive = true
+                };
+
+                _isHidden = false;
+                _current = form;
+                form.Show();
+                form.BringToFront();
+                txtInput.Focus();
+                form.BeginInvoke(new Action(() => { form.TopMost = true; form.BringToFront(); }));
+            }));
         }
+
+        /// <summary>整段英译汉「最近一次得分」：关闭按钮要拿它算 attempted/correct。</summary>
+        private static double _transLastScore = -1;
 
         /// <summary>在内嵌面板中展示一道测验题（2026-07-21）。</summary>
         /// <summary>在内嵌面板中展示一道测验题。返回该题所需内容高度（2026-08-08 改为返回 int，供面板自适应高度）。</summary>

@@ -73,6 +73,11 @@ namespace ToastFish.Model.PushControl
             if (PushWords.IsLearningActive)
                 return;
 
+            // 1b. #148：屏幕上还有正在等用户输入的弹窗（短文练习 / 阅读 / 英译汉 / 跨书确认…）时不弹惊喜复习。
+            // 惊喜弹窗会 _current?.Close()，把用户正在写译文的窗直接收掉 —— 表现就是「这次没有作答」。
+            if (NotificationForm.HasAnyLivePopup)
+                return;
+
             // 2. 防重入
             if (_surpriseInProgress)
                 return;
@@ -106,7 +111,8 @@ namespace ToastFish.Model.PushControl
             try
             {
                 // 双重检查（UI 线程）
-                if (PushWords.IsLearningActive)
+                // #148：UI 线程再判一次（钩子线程到这里的这段时间里可能刚弹出一张交互弹窗）
+                if (PushWords.IsLearningActive || NotificationForm.HasAnyLivePopup)
                 {
                     _surpriseInProgress = false;
                     return;

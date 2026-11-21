@@ -496,13 +496,8 @@ namespace ToastFish.Model.PushControl
                 string createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 int modelMode = Model.Ai.AiConfig.ModelMode;
 
-                // questions 列复用：type=trans 标记题型，items 是 5 句（原文 / 参考译文 / 采分点）
-                var itemsData = trans.Items.Select(it => new {
-                    s = it.Sentence,
-                    refer = it.Reference,
-                    points = it.Points
-                }).ToList();
-                var transData = new { type = "trans", items = itemsData };
+                // questions 列复用：type=trans 标记题型；refer 是整段参考译文，points 是采分点（#146 整段形态）
+                var transData = new { type = "trans", refer = trans.Reference, points = trans.Points };
                 string questionsJson = jss.Serialize(transData);
 
                 Select.InsertEssayLog(createdAt, Select.TABLE_NAME, wordsArr.Count,
@@ -1100,7 +1095,7 @@ namespace ToastFish.Model.PushControl
 
                     if (doTransPrefetch)
                     {
-                        // 考研：Part C 英译汉（短文 + 5 句划线翻译）
+                        // 考研：Part C 英译汉（#146 英语二形态：一段 140~170 词，整段译成中文）
                         var transTask = new Task(() =>
                         {
                             try
@@ -1116,7 +1111,7 @@ namespace ToastFish.Model.PushControl
                                 try { System.IO.File.AppendAllText(
                                     System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "Resources", "ai_diag.log"),
                                     DateTime.Now + " TRANS " + (ok
-                                        ? ("OK items=" + tr.Items.Count + " en=" + (tr.En != null ? tr.En.Length : 0) + "chars")
+                                        ? ("OK en=" + (tr.En != null ? tr.En.Length : 0) + "chars points=" + (tr.Points != null ? tr.Points.Count : 0))
                                         : ("FAIL err=" + (terr ?? "null") + " diag=" + (Model.Ai.EssayGenerator.LiveDiag ?? "null"))) + "\n"); } catch { }
                                 // 生成成功 → 清空累积新词；失败/超时保留，下轮继续累加
                                 if (ok) Select.ClearPendingEssayWords();
@@ -1993,7 +1988,7 @@ namespace ToastFish.Model.PushControl
 
                 if (useTrans)
                 {
-                    // === 考研 Part C 英译汉（短文 + 5 句划线翻译）===
+                    // === 考研 Part C 英译汉（英语二形态：整段翻译 + 一次评分，2026-11-19 / #146）===
                     Model.Ai.TransPassage trans = null;
                     List<Word> transWords = null;
                     Task transTask = null;
@@ -2078,18 +2073,16 @@ namespace ToastFish.Model.PushControl
                     {
                         using (var done = new ManualResetEvent(false))
                         {
-                            int transResult = 0;
+                            int transResult = -1;   // -1 = 用户直接关掉，没交卷
                             string transAnswersJson = "[]";
-                            NotificationForm.ShowEssayPopup(
-                                trans.En, "",
+                            NotificationForm.ShowTransPassagePopup(
+                                "✍️ 英译汉 · 整段翻译（英语二 Part C）", trans,
                                 transWords != null ? transWords.Select(w => w.headWord).ToList() : new List<string>(),
-                                null, null,
                                 r => { transResult = r; done.Set(); },
-                                0, json => { transAnswersJson = json; },
-                                null, trans.Items, true);
+                                json => { transAnswersJson = json; }, 0);
                             done.WaitOne();
-                            int attempted = (transResult >> 16) & 0xFFFF;
-                            int correct = transResult & 0xFFFF;
+                            int attempted = transResult < 0 ? 0 : ((transResult >> 16) & 0xFFFF);
+                            int correct = transResult < 0 ? 0 : (transResult & 0xFFFF);
                             SaveTransLog(transWords, trans, attempted, correct, transAnswersJson);
                         }
                         return;
