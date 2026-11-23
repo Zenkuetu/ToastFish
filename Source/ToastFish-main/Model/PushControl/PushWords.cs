@@ -2198,8 +2198,8 @@ namespace ToastFish.Model.PushControl
                                     r => { cloze4Result = r; done.Set(); },
                                     0, json => { cloze4AnswersJson = json; });
                                 done.WaitOne();
-                                int attempted = (cloze4Result >> 16) & 0xFFFF;
-                                int correct = cloze4Result & 0xFFFF;
+                                int attempted = cloze4Result < 0 ? 0 : (cloze4Result >> 16) & 0xFFFF;
+                                int correct = cloze4Result < 0 ? 0 : cloze4Result & 0xFFFF;
                                 if (attempted > 0)
                                 {
                                     ApplyClozeSM2Feedback(cloze4Words, finishedCards, attempted, correct, cloze4AnswersJson);
@@ -2321,8 +2321,8 @@ namespace ToastFish.Model.PushControl
                                 r => { clozeResult = r; done.Set(); },
                                 0, json => { clozeAnswersJson = json; });
                             done.WaitOne();
-                            int attempted = (clozeResult >> 16) & 0xFFFF;
-                            int correct = clozeResult & 0xFFFF;
+                            int attempted = clozeResult < 0 ? 0 : (clozeResult >> 16) & 0xFFFF;
+                            int correct = clozeResult < 0 ? 0 : clozeResult & 0xFFFF;
 
                             if (attempted > 0)
                             {
@@ -2446,8 +2446,8 @@ namespace ToastFish.Model.PushControl
                             0, json => { answersJson = json; },
                              fetched.Result.LongSentences, fetched.Result.Translations);
                         done.WaitOne(); // 阻塞直到用户完成阅读+测验
-                        int attempted = (quizResult >> 16) & 0xFFFF;
-                        int correct = quizResult & 0xFFFF;
+                        int attempted = quizResult < 0 ? 0 : (quizResult >> 16) & 0xFFFF;
+                        int correct = quizResult < 0 ? 0 : quizResult & 0xFFFF;
 
                         // 持久化短文记录（2026-07-22）
                         SaveEssayLog(fetched, attempted, correct, answersJson);

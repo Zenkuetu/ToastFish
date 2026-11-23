@@ -2110,7 +2110,8 @@ namespace ToastFish.View
                 Action startQuiz = () =>
                 {
                     if (quizIdx >= 0) return;
-                    if (!hasQuiz) { form.Close(); finish(0); return; }
+                    // #151：必须先 finish 再 Close —— Close() 同步触发 FormClosed 的 finish(-1)，会把真实结果挡掉
+                    if (!hasQuiz) { finish(0); form.Close(); return; }
                     quizIdx = 0;
                     // 测验控件一律在 1x 下新建（#128）：放大态下新建会让宽度沿用放大后的值，
                     // 松开 Alt 时又只还原旧控件，文字就会越过窗口右边缘。
@@ -2163,7 +2164,9 @@ namespace ToastFish.View
                             {
                                 if (closed) return; closed = true;
                                 answersSink?.Invoke(BuildChoiceAnswersJson(picks, questions));
-                                form.Close(); finish((ac << 16) | cc);
+                                // #151：先 finish 再 Close（Close() 同步触发 FormClosed 里的 finish(-1)，顺序反了就会把真实成绩记成「没作答」）
+                                finish((ac << 16) | cc);
+                                form.Close();
                             };
                             closeIntensive = doClose;   // 精读走完也回到这里收尾
 
@@ -2739,6 +2742,29 @@ namespace ToastFish.View
                                 int resH = btnTop - 8 - rtbResult.Top;
                                 if (resH < 80) resH = 80;
                                 rtbResult.Height = resH;
+                                // #150：结果框高度对齐整行 —— RichEdit 从顶部逐行绘制，框高不是行高整数倍时
+                                // 最后一行只露半截（用户截图里那个「比」字被切掉一半，看着像内容没显示完）。
+                                // 行高必须实测（相邻两行首字符的 Y 差），Font.Height 只有 18px 而真实行距 26px。
+                                try
+                                {
+                                    if (rtbResult.TextLength > 0 && rtbResult.Lines.Length > 1)
+                                    {
+                                        int i0 = rtbResult.GetFirstCharIndexFromLine(0);
+                                        int i1 = rtbResult.GetFirstCharIndexFromLine(1);
+                                        if (i0 >= 0 && i1 > i0)
+                                        {
+                                            int offY = rtbResult.GetPositionFromCharIndex(i0).Y;      // RichEdit 内部首行上边距
+                                            int lineAdv = rtbResult.GetPositionFromCharIndex(i1).Y - offY;
+                                            if (lineAdv > 0 && resH > offY + lineAdv)
+                                            {
+                                                int lines = (resH - offY) / lineAdv;
+                                                int snapped = offY + lines * lineAdv;
+                                                if (snapped >= 80) rtbResult.Height = snapped;
+                                            }
+                                        }
+                                    }
+                                }
+                                catch { }
                                 rtbResult.Visible = true;
                                 btnClose.Visible = true;
                                 rtbResult.BringToFront();

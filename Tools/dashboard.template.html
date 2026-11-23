@@ -2469,8 +2469,13 @@ const PageEssays = {
       return String(a.pick) === String(val)
     }
     const hasAnswers = (log) => listedAnswers(log).length > 0
+    // 没作答：attempted=0，或历史数据里的 65535（-1 直接按位拆包的哨兵，#151）
+    const notAnswered = (log) => {
+      const a = Number(log && log.attempted) || 0
+      return a <= 0 || a >= 60000
+    }
     // 真正选了/填了且判错的题数（未作答不计入，避免和 attempted 口径打架）
-    const wrongCount = (log) => answersOf(log).filter(a =>
+    const wrongCount = (log) => notAnswered(log) ? 0 : answersOf(log).filter(a =>
       a.pick !== '' && a.pick !== null && a.pick !== undefined && !a.ok).length
     const verdictOf = (log, i) => {
       const a = findAnswer(log, i)
@@ -2678,7 +2683,7 @@ const PageEssays = {
 
     return { expandedId, toggle, onEnter, onLeave, isEssayQ, isClozeQ, isCloze4Q, isTransQ, transOf, transScore, transWrongCount, transComment, transHits, transMisses, transBetter, transRefText, legacyTrans, legacyScore, legacyUser, deleteEssay, deleting, toastMsg, toastType, copyEssayForAI,
              showAllWrong, visibleWrongWords,
-             answersOf, listedAnswers, pickedOf, isWrongPick, isRightPick, hasAnswers, wrongCount, verdictOf, verdictText }
+             answersOf, listedAnswers, pickedOf, isWrongPick, isRightPick, hasAnswers, notAnswered, wrongCount, verdictOf, verdictText }
   },
   template: `
 <div class="page page-essays">
@@ -2734,7 +2739,7 @@ const PageEssays = {
             {{ isClozeQ(log.questions) ? '🔤 15选10' : (isCloze4Q(log.questions) ? '🔤 20空四选一' : (isTransQ(log.questions) ? '✍️ 英译汉' : '📖 阅读理解')) }}
           </span>
           <span class="essay-date">{{ log.createdAt }}</span>
-          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ log.correct || 0 }}/{{ isClozeQ(log.questions) ? (log.attempted || 10) : (isCloze4Q(log.questions) ? (log.attempted || 20) : (isTransQ(log.questions) ? (log.attempted || 1) : (log.attempted || 3))) }}{{ isTransQ(log.questions) ? '段译对' : '正确' }}<span v-if="isTransQ(log.questions) && transWrongCount(log) > 0" class="essay-wrong-count"> · 得分未过 6</span><span v-else-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 题</span></span>
+          <span class="essay-meta">{{ log.bookName }} · {{ log.wordCount }}词 · {{ log.modelMode === 1 ? '推理' : '快速' }} · {{ notAnswered(log) ? '没作答' : ((log.correct || 0) + '/' + (isClozeQ(log.questions) ? (log.attempted || 10) : (isCloze4Q(log.questions) ? (log.attempted || 20) : (isTransQ(log.questions) ? (log.attempted || 1) : (log.attempted || 3)))) + (isTransQ(log.questions) ? '段译对' : '正确')) }}<span v-if="!notAnswered(log) && isTransQ(log.questions) && transWrongCount(log) > 0" class="essay-wrong-count"> · 得分未过 6</span><span v-else-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 题</span></span>
         </div>
         <div class="essay-summary-right">
           <span class="essay-snippet">{{ (log.essayEN || '').substring(0, 120) }}{{ (log.essayEN || '').length > 120 ? '...' : '' }}</span>
@@ -2760,7 +2765,7 @@ const PageEssays = {
         </div>
         <!-- 选择题题目 -->
         <div class="essay-section" v-if="isEssayQ(log.questions)">
-          <h4>❓ 题目 ({{ log.correct || 0 }}/{{ log.attempted || log.questions.length }} 正确)</h4>
+          <h4>❓ 题目 ({{ notAnswered(log) ? '未作答' : ((log.correct || 0) + '/' + (log.attempted || log.questions.length) + ' 正确') }})</h4>
           <div v-for="(q, qi) in log.questions" :key="qi" class="essay-question">
             <p class="eq-text">
               Q{{ qi + 1 }}. {{ q.q }}
@@ -2777,7 +2782,7 @@ const PageEssays = {
         </div>
         <!-- 15选10 候选词 -->
         <div class="essay-section" v-if="isClozeQ(log.questions)">
-          <h4>🔤 候选词 (15选10 · {{ log.correct || 0 }}/{{ log.attempted || 10 }} 正确<span v-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 空</span>)</h4>
+          <h4>🔤 候选词 (15选10 · {{ notAnswered(log) ? '未作答' : ((log.correct || 0) + '/' + (log.attempted || 10) + ' 正确') }}<span v-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 空</span>)</h4>
           <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
             <span v-for="(c, ci) in log.questions.candidates" :key="ci"
                   class="cloze-chip"
@@ -2803,7 +2808,7 @@ const PageEssays = {
         </div>
         <!-- 20空四选一 完形填空 -->
         <div class="essay-section" v-if="isCloze4Q(log.questions)">
-          <h4>🔤 完形填空 (20空四选一 · {{ log.correct || 0 }}/{{ log.attempted || 20 }} 正确<span v-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 空</span>)</h4>
+          <h4>🔤 完形填空 (20空四选一 · {{ notAnswered(log) ? '未作答' : ((log.correct || 0) + '/' + (log.attempted || 20) + ' 正确') }}<span v-if="wrongCount(log) > 0" class="essay-wrong-count"> · 错 {{ wrongCount(log) }} 空</span>)</h4>
           <div v-for="(q, qi) in log.questions.questions" :key="qi" class="essay-question">
             <p class="eq-text">
               空 {{ q.blank }}：
