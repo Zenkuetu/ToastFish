@@ -1767,6 +1767,27 @@ namespace ToastFish.Model.PushControl
                 // // History.Clear()
                 Thread.Sleep(QUIZ_GAP_MS);   // #123：原来每题先干等 0.5 秒
                 CurrentWord = CopyList[0];
+
+                // #153：拼写题与三选一按题随机二选一（各 50%）。拼写题是**替换**掉这道三选一，
+                // 不新增题量、不额外停顿，所以一轮的总长度不变；答错同样重排到队尾（与三选一一致）。
+                if (CanSpell(CurrentWord) && new SafeRandom().Next(2) == 0)
+                {
+                    if (PushWaitSpellQuestion(CurrentWord))
+                    {
+                        CopyList.RemoveAt(0);
+                        Thread.Sleep(QUIZ_RIGHT_GAP_MS);
+                    }
+                    else
+                    {
+                        // 拼写题没有 A/B/C 选项，正确答案直接给单词本身
+                        ToastBridge.ShowMessage("ToastFish", "错误 正确答案：" + CurrentWord.headWord, WRONG_MSG_MS);
+                        CopyList.RemoveAt(0);
+                        CopyList.Add(CurrentWord);
+                        Thread.Sleep(WRONG_MSG_MS);
+                    }
+                    continue;
+                }
+
                 List<Word> rndWords;
                 if (RandomList.Count >= 10)
                     rndWords = GetTransQuestionDistractors(CurrentWord, RandomList, 2);
@@ -1899,6 +1920,40 @@ namespace ToastFish.Model.PushControl
             if (rst == 1)
                 isFinshed = true;
             return isFinshed;
+        }
+
+        /// <summary>
+        /// #153：这个词能不能出拼写题。只有纯 A~Z 字母、长度 3~20 的词才适合逐字母填空；
+        /// 带空格 / 连字符 / 撇号的词组（in terms of、well-being、o'clock）继续走三选一，
+        /// 否则用户根本不知道空格该不该打。
+        /// </summary>
+        private static bool CanSpell(Word w)
+        {
+            if (w == null || string.IsNullOrEmpty(w.headWord)) return false;
+            string s = w.headWord.Trim();
+            if (s.Length < 3 || s.Length > 20) return false;
+            foreach (char c in s)
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// #153 拼写题：弹窗给中文释义 + 与单词等长的下划线，用户键入完整单词。
+        /// 返回值与 PushWaitTransQuestion 一致：true = 拼对（拼错/跳过/超时都算错，重排队尾）。
+        /// </summary>
+        public bool PushWaitSpellQuestion(Word CurrentWord)
+        {
+            var Tcs = new TaskCompletionSource<int>();
+            string posTran = string.IsNullOrEmpty(CurrentWord.pos)
+                ? CurrentWord.tranCN
+                : CurrentWord.pos + " " + CurrentWord.tranCN;
+
+            NotificationForm.ShowSpellPopup("拼写", posTran, CurrentWord.headWord.Trim(),
+                r => Tcs.TrySetResult(r));
+
+            int rst = AwaitAnswer(Tcs, -1);
+            NotificationForm.CloseCurrent();   // #98：答完立刻收掉弹窗（FinishSpell 已关，这里兜底）
+            return rst == 0;
         }
 
         public void PushOneTransQuestion(Word CurrentWord, string B, string C)

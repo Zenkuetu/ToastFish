@@ -51,6 +51,13 @@ namespace ToastFish.Model.PushControl
         /// <summary>每次键盘按键或鼠标点击时调用。在钩子线程上执行，必须极快返回。</summary>
         public static event Action OnInputEvent;
 
+        /// <summary>
+        /// #153 拼写题专用的临时按键过滤器：返回 true 表示这个键已被消费，钩子会吞掉它、不再下发给前台程序。
+        /// 只在拼写弹窗显示期间设置，其它时候为 null（完全不碰任何按键）。
+        /// 回调在钩子线程（= 装钩子的 UI 线程）执行，必须立刻返回。
+        /// </summary>
+        public static Func<int, bool> KeyFilter;
+
         private static bool _started;
 
         /// <summary>
@@ -104,6 +111,18 @@ namespace ToastFish.Model.PushControl
                 int msg = wParam.ToInt32();
                 if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
                 {
+                    // #153：拼写题期间先过过滤器。吞掉的字母不能再漏进用户当前的前台程序，
+                    // 也不能触发惊喜复习（答题期间弹惊喜窗会把题目顶掉）。
+                    var filter = KeyFilter;
+                    if (filter != null)
+                    {
+                        try
+                        {
+                            int vk = Marshal.ReadInt32(lParam);   // KBDLLHOOKSTRUCT.vkCode 是第一个 DWORD
+                            if (filter(vk)) return (IntPtr)1;     // 1 = 已处理，不再往下传
+                        }
+                        catch { }
+                    }
                     OnInputEvent?.Invoke();
                 }
             }

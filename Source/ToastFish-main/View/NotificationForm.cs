@@ -1357,6 +1357,184 @@ namespace ToastFish.View
             }));
         }
 
+        // ===== #153 拼写题：中文释义 + 与单词等长的下划线，用户直接键入，输满自动判定 =====
+        //
+        // 输入通道为什么走全局钩子而不是窗体的 KeyPress：
+        // 所有弹窗都继承 NoActivateForm（ShowWithoutActivation），显示时不抢焦点，
+        // 所以键盘焦点很可能还在用户原来的程序里（浏览器 / 编辑器），KeyPress 根本收不到。
+        // 这里复用惊喜复习已经在跑的 InputMonitor 低层键盘钩子，只在拼写弹窗可见时接管
+        // A~Z / Backspace / Esc 三类键并吞掉（否则用户会在别的窗口里打出一串乱码）。
+
+        /// <summary>当前正在作答的拼写题（null = 没有）。</summary>
+        private static SpellSession _spell;
+
+        private sealed class SpellSession
+        {
+            public SpellSlots Slots;
+            public string Answer;
+            public Action<int> Finish;   // 0 = 拼对，1 = 拼错，-1 = 跳过 / 超时 / 被关闭
+            public bool Done;
+        }
+
+        /// <summary>注册给 InputMonitor.KeyFilter 的入口：返回 true 表示这个键归拼写题所有。</summary>
+        private static bool SpellKeyFilter(int vk)
+        {
+            var s = _spell;
+            var form = _current;
+            if (s == null || s.Done || form == null || form.IsDisposed || !form.Visible) return false;
+            bool letter = vk >= 0x41 && vk <= 0x5A;                  // A~Z
+            if (!letter && vk != 0x08 && vk != 0x1B) return false;   // 只接管字母 / Backspace / Esc
+            if ((Control.ModifierKeys & (Keys.Control | Keys.Alt)) != 0) return false;  // 别抢 Ctrl+C / Alt+Tab
+            try { form.BeginInvoke(new Action(() => HandleSpellKey(s, vk))); } catch { }
+            return true;
+        }
+
+        private static void HandleSpellKey(SpellSession s, int vk)
+        {
+            if (s == null || s.Done || !ReferenceEquals(s, _spell)) return;
+            var form = _current;
+            if (form == null || form.IsDisposed) return;
+
+            if (vk == 0x1B) { FinishSpell(s, form, -1); return; }        // Esc = 跳过
+            if (vk == 0x08)                                              // Backspace = 退一个字母
+            {
+                if (s.Slots.Typed > 0) { s.Slots.Back(); s.Slots.Invalidate(); }
+                return;
+            }
+
+            if (s.Slots.Typed >= s.Answer.Length) return;
+            s.Slots.Type((char)('a' + (vk - 0x41)));
+            s.Slots.Invalidate();
+            if (s.Slots.Typed < s.Answer.Length) return;
+
+            bool ok = string.Equals(s.Slots.InputText, s.Answer, StringComparison.OrdinalIgnoreCase);
+            FinishSpell(s, form, ok ? 0 : 1);
+        }
+
+        /// <summary>收尾：先回调再关窗（#143/#151 的教训：Close() 会同步触发 FormClosed 里的兜底回调）。</summary>
+        private static void FinishSpell(SpellSession s, Form form, int result)
+        {
+            if (s == null || s.Done) return;
+            s.Done = true;
+            if (ReferenceEquals(_spell, s)) _spell = null;
+            Model.PushControl.InputMonitor.KeyFilter = null;
+            try { if (s.Finish != null) s.Finish(result); } catch { }
+            try { if (form != null && !form.IsDisposed) form.Close(); } catch { }
+        }
+
+        /// <summary>
+        /// #153 拼写题弹窗：上方中文释义，下方与单词等长的下划线；用户直接键入字母，填满即判定。
+        /// callback(0)=拼对，callback(1)=拼错，callback(-1)=跳过（Esc / 跳过按钮）/ 超时 / 被关闭。
+        /// </summary>
+        public static void ShowSpellPopup(string title, string meaning, string answer,
+            Action<int> callback, int timeoutMs = TIMEOUT_QUIZ)
+        {
+            var dispatcher = Model.PushControl.PushWords.UIDispatcher;
+            if (dispatcher == null || string.IsNullOrEmpty(answer)) { callback(-1); return; }
+
+            dispatcher.BeginInvoke(new Action(() =>
+            {
+                CloseMessageOverlays();
+
+                // 万一上一题还没收干净（正常不会），先把它的会话作废，避免两题抢键
+                _spell = null;
+                Model.PushControl.InputMonitor.KeyFilter = null;
+
+                _current?.Close();
+                _current?.Dispose();
+
+                int formW = 500, padX = 20, padTop = 14;
+                int cw = formW - padX * 2;
+
+                int hTitle = string.IsNullOrEmpty(title) ? 0 : MeasureH(title, FONT_BTN, cw);
+                string meaningLine = "释义：" + meaning;
+                int hMeaning = MeasureH(meaningLine, FONT_POS, cw);
+                const int slotH = 58;   // 只留一条下划线 + 字母的高度，别在释义和字母之间空一大片
+                const string hint = "直接键入这个单词，输满自动判定 · Esc 跳过";
+                int hHint = MeasureH(hint, FONT_STAT, cw);
+
+                int formH = padTop
+                    + (hTitle > 0 ? hTitle + 6 : 0)
+                    + hMeaning + 12
+                    + slotH + 10
+                    + hHint + 20;
+
+                var form = new PopupForm(formW, formH, "ToastFish");
+                form.PlaceBottomRight(Screen.PrimaryScreen.WorkingArea);
+
+                int y = padTop;
+                if (hTitle > 0)
+                {
+                    form.Controls.Add(NewFixedLabel(title, Color.FromArgb(136, 136, 136),
+                        FONT_BTN, padX, y, cw, hTitle));
+                    y += hTitle + 6;
+                }
+                form.Controls.Add(NewFixedLabel(meaningLine, Color.White, FONT_POS, padX, y, cw, hMeaning));
+                y += hMeaning + 12;
+
+                var slots = new SpellSlots
+                {
+                    Answer = answer,
+                    Location = new Point(padX, y),
+                    Size = new Size(cw, slotH)
+                };
+                form.Controls.Add(slots);
+                y += slotH + 10;
+
+                form.Controls.Add(NewFixedLabel(hint, Color.FromArgb(136, 136, 136),
+                    FONT_STAT, padX, y, cw - 88, hHint));
+
+                // 兜底出口：钩子万一被安全软件拦掉，用户还能用鼠标跳过这道题
+                var btnSkip = new Button
+                {
+                    Text = "跳过",
+                    Location = new Point(formW - padX - 76, y - 2),
+                    Size = new Size(76, hHint + 6),
+                    BackColor = Color.FromArgb(45, 45, 45),
+                    ForeColor = Color.FromArgb(170, 170, 170),
+                    FlatStyle = FlatStyle.Flat,
+                    Font = FONT_STAT,
+                    TabStop = false
+                };
+                btnSkip.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 70);
+                form.Controls.Add(btnSkip);
+
+                var session = new SpellSession { Slots = slots, Answer = answer, Finish = callback };
+                _spell = session;
+                btnSkip.Click += (s, e) => FinishSpell(session, form, -1);
+
+                var timer = new System.Windows.Forms.Timer { Interval = timeoutMs };
+                timer.Tick += (s, e) => { timer.Stop(); FinishSpell(session, form, -1); };
+                timer.Start();
+                form.Tag = new PopupState { Timer = timer, TotalMs = timeoutMs, StartedAt = DateTime.Now, PausedRemainingMs = -1, Interactive = true };
+
+                form.FormClosed += (s, e) =>
+                {
+                    timer.Dispose();
+                    if (ReferenceEquals(_spell, session)) _spell = null;
+                    Model.PushControl.InputMonitor.KeyFilter = null;
+                    if (_current == form) _current = null;
+                    _isHidden = false;
+                    if (!session.Done)
+                    {
+                        session.Done = true;
+                        try { if (session.Finish != null) session.Finish(-1); } catch { }
+                    }
+                    form.Dispose();
+                };
+
+                _isHidden = false;
+                _current = form;
+                SuppressSpaceEnterKeys(form);
+                form.Show();
+                form.BringToFront();
+                form.BeginInvoke(new Action(() => { form.TopMost = true; form.BringToFront(); }));
+
+                // 必须放在 Show 之后：SpellKeyFilter 要求弹窗已可见才开始吞键
+                Model.PushControl.InputMonitor.KeyFilter = SpellKeyFilter;
+            }));
+        }
+
         /// <summary>
         /// 切换当前弹窗的显示/隐藏状态（ALT+H 热键入口）
         /// 隐藏时暂停计时器并记录剩余时间，显示时恢复计时并刷新剩余时间
@@ -4423,6 +4601,81 @@ form.PlaceBottomRight();
             get { return true; }
         }
     }
+
+    /// <summary>
+    /// #153 拼写题的「字母槽」：每个字母一格，未输入时是一条下划线，键入后下划线被字母替换。
+    /// 全自绘 —— 用 Label 拼等宽下划线在 125%/150% 缩放下对不齐，退格还要重建整段文本。
+    /// </summary>
+    internal class SpellSlots : Control
+    {
+        public string Answer = "";
+        private readonly StringBuilder _buf = new StringBuilder();
+
+        public int Typed { get { return _buf.Length; } }
+        public string InputText { get { return _buf.ToString(); } }
+
+        public SpellSlots()
+        {
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            BackColor = PopupForm.DefaultBack;
+        }
+
+        public void Type(char c)
+        {
+            if (_buf.Length >= Answer.Length) return;
+            _buf.Append(char.ToLowerInvariant(c));
+        }
+
+        public void Back()
+        {
+            if (_buf.Length > 0) _buf.Length--;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (string.IsNullOrEmpty(Answer)) return;
+
+            int n = Answer.Length;
+            int gap = n > 14 ? 4 : 6;
+            int cell = (Width - gap * (n - 1)) / Math.Max(1, n);
+            if (cell > 44) cell = 44;
+            if (cell < 8) cell = 8;
+            int total = cell * n + gap * (n - 1);
+            int x0 = (Width - total) / 2;
+            int lineY = Height - 16;
+
+            float fs = cell * 0.62f;
+            if (fs > 24f) fs = 24f;
+            if (fs < 10f) fs = 10f;
+
+            using (var font = new Font("Consolas", fs, FontStyle.Bold))
+            using (var penEmpty = new Pen(Color.FromArgb(80, 80, 80), 2f))
+            using (var penCur = new Pen(Color.FromArgb(90, 160, 220), 3f))
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    int x = x0 + i * (cell + gap);
+                    if (i < _buf.Length)
+                    {
+                        // 已输入的格子：下划线消失，只留字母（就是「每输一个字母少一条下划线」）
+                        string ch = _buf[i].ToString();
+                        SizeF sz = e.Graphics.MeasureString(ch, font);
+                        e.Graphics.DrawString(ch, font, Brushes.White,
+                            x + (cell - sz.Width) / 2f, lineY - sz.Height + 2);
+                    }
+                    else
+                    {
+                        var pen = (i == _buf.Length) ? penCur : penEmpty;
+                        e.Graphics.DrawLine(pen, x, lineY, x + cell, lineY);
+                    }
+                }
+            }
+        }
+    }
+
 
     /// <summary>
     /// 支持「划重点」的 RichTextBox（2026-10-29）。
